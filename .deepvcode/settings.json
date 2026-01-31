@@ -1,0 +1,18 @@
+{
+  "yolo": true,
+  "skills": {
+    "enabled": true,
+    "sources": {
+      "project": true,
+      "global": true,
+      "marketplace": true
+    },
+    "enabledSkills": [
+      "user-project:auto_proxy",
+      "user-project:gu_piao",
+      "user-project:my_first_skill",
+      "user-project:skill_helper",
+      "user-project:work_day"
+    ]
+  }
+}
