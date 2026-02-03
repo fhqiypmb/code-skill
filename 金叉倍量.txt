@@ -1,0 +1,81 @@
+MA1:MA(CLOSE,M1),COLORWHITE;
+MA2:MA(CLOSE,M2),COLORYELLOW;
+MA3:MA(CLOSE,M3),COLORFF80FF;
+MA4:MA(CLOSE,M4),COLORGREEN;
+MA5:MA(CLOSE,M5),COLORFF8F00;
+{MA6:MA(CLOSE,M6);
+MA7:MA(CLOSE,M7);}
+
+ZT:=C>REF(C,1)*1.092 AND C<REF(C,1)*1.302 AND C>O;
+DT:=C<REF(C,1)*0.901 AND C>REF(C,1)*0.898;
+STICKLINE(ZT AND PERIOD=5,C,O,4,0),COLORRED;
+STICKLINE(ZT AND PERIOD=5, C,O,2,1),COLORRED;
+STICKLINE(DT AND PERIOD=5,C,O,2,0),COLORGREEN;
+{==========行业概念信息获取==========}
+行业名称:=HYBLOCK;
+概念名称:=GNBLOCK;
+{==========统计信息==========}
+DRAWTEXT_FIX(ISLASTBAR,0,0,0,STRCAT('行业:',行业名称)),COLOR00C0C0;
+DRAWTEXT_FIX(ISLASTBAR,0,0.04,0,STRCAT('概念:',概念名称)),COLOR00C0C0;
+
+{通达信主图叠加指标 - MA20金叉MA30倍量阳线确认信号}
+{策略逻辑：
+1. MA3金叉MA4
+2. 金叉后出现阴线
+3. 最后一根阴线后出现倍量阳线（量能≥最后一根阴线的2倍）
+4. 倍量阳线之后再出现阳线，收盘价≥倍量阳线收盘价的99.5%
+5. 整个过程中不能出现死叉}
+
+{===== 基础判断 =====}
+阳线:=CLOSE>OPEN;
+阴线:=CLOSE<OPEN;
+
+{===== 第一步：金叉检测 =====}
+金叉日:=CROSS(MA3,MA4);
+距金叉天数:=BARSLAST(金叉日);
+
+{===== 第二步：死叉检测（金叉后不能出现死叉）=====}
+死叉日:=CROSS(MA4,MA3);
+距死叉天数:=BARSLAST(死叉日);
+金叉后无死叉:=距金叉天数<距死叉天数 OR 距死叉天数>15;
+
+{===== 第三步：金叉后10天内寻找最后一根阴线的成交量 =====}
+{从远到近查找，确保取到最近的阴线}
+YX5:=REF(距金叉天数,5)<=10 AND REF(距金叉天数,5)>0 AND REF(阴线,5);
+YX4:=REF(距金叉天数,4)<=10 AND REF(距金叉天数,4)>0 AND REF(阴线,4);
+YX3:=REF(距金叉天数,3)<=10 AND REF(距金叉天数,3)>0 AND REF(阴线,3);
+YX2:=REF(距金叉天数,2)<=10 AND REF(距金叉天数,2)>0 AND REF(阴线,2);
+YX1:=REF(距金叉天数,1)<=10 AND REF(距金叉天数,1)>0 AND REF(阴线,1);
+
+{从远到近取值，最近的阴线覆盖之前的}
+YXL5:=IF(YX5,REF(VOL,5),0);
+YXL4:=IF(YX4,REF(VOL,4),YXL5);
+YXL3:=IF(YX3,REF(VOL,3),YXL4);
+YXL2:=IF(YX2,REF(VOL,2),YXL3);
+阴线量:=IF(YX1,REF(VOL,1),YXL2);
+
+有阴线:=阴线量>0;
+
+{===== 第四步：当前是倍量阳线（量≥阴线2倍）=====}
+倍量阳:=距金叉天数>0 AND 距金叉天数<=10 AND
+        阳线 AND VOL>=阴线量*2 AND 有阴线;
+
+{===== 第五步：记录倍量阳线信息 =====}
+距倍量:=BARSLAST(倍量阳);
+倍量价:=REF(CLOSE,距倍量);
+
+{===== 第六步：确认阳线判断 =====}
+{条件：1-5天前出现过倍量阳线，当前是阳线，收盘价>=倍量阳线收盘价}
+确认阳:=距倍量>=1 AND 距倍量<=5 AND 阳线 AND CLOSE>=倍量价;
+
+{===== 第七步：只取首次确认阳线 =====}
+{检查前1-5天内是否已有确认阳线，有则不再触发}
+前有确认:=REF(确认阳,1)=1 OR REF(确认阳,2)=1 OR REF(确认阳,3)=1 OR REF(确认阳,4)=1 OR REF(确认阳,5)=1;
+首次确认:=确认阳 AND 前有确认=0;
+
+{===== 综合买入信号 =====}
+买入:=首次确认 AND 金叉后无死叉;
+
+{===== 画图标记 =====}
+DRAWICON(金叉日,LOW*1,1);
+DRAWICON(买入,LOW*1,42);
