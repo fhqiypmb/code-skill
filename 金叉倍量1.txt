@@ -70,16 +70,12 @@ YXL2:=IF(YX2,REF(VOL,2),YXL3);
 倍量阳:=距金叉天数>0 AND 距金叉天数<=10 AND
         阳线 AND VOL>=阴线量*2 AND 有阴线;
 
-{调试：显示阴线量和当前成交量对比}
-DRAWTEXT(倍量阳,LOW*0.95,STRCAT('倍:',NUMTOSTR(VOL/阴线量,1))),COLORMAGENTA;
 
-{===== 第五步：记录首根倍量阳线信息 =====}
-{检查前1-5天是否已有倍量阳，没有则当前是首根}
-前有倍量:=REF(倍量阳,1) OR REF(倍量阳,2) OR REF(倍量阳,3) OR REF(倍量阳,4) OR REF(倍量阳,5);
-首根倍量:=倍量阳 AND 前有倍量=0;
 
-{记录距离首根倍量阳线的天数和价格}
-距首倍:=BARSLAST(首根倍量);
+{===== 第五步：记录倍量阳线信息 =====}
+{只取金叉后第一根倍量阳线}
+首倍量:=倍量阳 AND (REF(倍量阳,1)=0 AND REF(倍量阳,2)=0 AND REF(倍量阳,3)=0 AND REF(倍量阳,4)=0 AND REF(倍量阳,5)=0);
+距首倍:=BARSLAST(首倍量);
 首倍价:=REF(CLOSE,距首倍);
 
 {===== 第六步：确认阳线判断 =====}
@@ -98,16 +94,24 @@ DRAWTEXT(倍量阳,LOW*0.95,STRCAT('倍:',NUMTOSTR(VOL/阴线量,1))),COLORMAGEN
 DRAWICON(金叉日,LOW*0.99,1);
 DRAWICON(买入,LOW*0.99,42);
 
-{===== 第八步：买入信号时显示箱体信息 =====}
-{计算60天箱顶箱底}
-箱顶:=REF(HHV(HIGH,60),1);
-箱底:=REF(LLV(LOW,60),1);
-箱中:=(箱顶+箱底)/2;
+{===== 第八步：买入信号时画60天震荡箱体 =====}
+距买入:=BARSLAST(买入);
 
-{计算买入价在箱体中的位置（0-100%，50%为中轴）}
-位置:=(CLOSE-箱底)/(箱顶-箱底)*100;
+{在买入信号当天计算箱顶箱底}
+信号顶:=IF(买入,REF(HHV(HIGH,60),1),0);
+信号底:=IF(买入,REF(LLV(LOW,60),1),0);
 
-{在买入信号处显示信息}
-DRAWTEXT(买入,HIGH*1.02,STRCAT('顶:',NUMTOSTR(箱顶,2))),COLORYELLOW;
-DRAWTEXT(买入,HIGH*1.01,STRCAT('底:',NUMTOSTR(箱底,2))),COLORGREEN;
-DRAWTEXT(买入,LOW*0.98,STRCAT('位:',NUMTOSTR(位置,0))),COLORWHITE;
+{向前传递箱顶箱底值到60天范围内}
+顶1:=REF(信号顶,距买入);
+底1:=REF(信号底,距买入);
+
+{判断是否在箱体范围内}
+范围内:=距买入>=0 AND 距买入<=5 AND 顶1>0;
+
+{画箱顶箱底水平线：每根K线画一小段}
+STICKLINE(范围内,顶1,顶1,0.5,0),COLORYELLOW;
+STICKLINE(范围内,底1,底1,0.5,0),COLORYELLOW;
+
+{画左右竖线}
+STICKLINE(距买入=5 AND 顶1>0,顶1,底1,0.5,0),COLORYELLOW;
+STICKLINE(买入,信号顶,信号底,0.5,0),COLORYELLOW;
