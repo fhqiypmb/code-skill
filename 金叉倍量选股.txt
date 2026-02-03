@@ -1,30 +1,15 @@
-MA1:MA(CLOSE,M1),COLORWHITE;
-MA2:MA(CLOSE,M2),COLORYELLOW;
-MA3:MA(CLOSE,M3),COLORFF80FF;
-MA4:MA(CLOSE,M4),COLORGREEN;
-MA5:MA(CLOSE,M5),COLORFF8F00;
-{MA6:MA(CLOSE,M6);
-MA7:MA(CLOSE,M7);}
-
-ZT:=C>REF(C,1)*1.092 AND C<REF(C,1)*1.302 AND C>O;
-DT:=C<REF(C,1)*0.901 AND C>REF(C,1)*0.898;
-STICKLINE(ZT AND PERIOD=5,C,O,4,0),COLORRED;
-STICKLINE(ZT AND PERIOD=5, C,O,2,1),COLORRED;
-STICKLINE(DT AND PERIOD=5,C,O,2,0),COLORGREEN;
-{==========行业概念信息获取==========}
-行业名称:=HYBLOCK;
-概念名称:=GNBLOCK;
-{==========统计信息==========}
-DRAWTEXT_FIX(ISLASTBAR,0,0,0,STRCAT('行业:',行业名称)),COLOR00C0C0;
-DRAWTEXT_FIX(ISLASTBAR,0,0.04,0,STRCAT('概念:',概念名称)),COLOR00C0C0;
-
-{通达信主图叠加指标 - MA20金叉MA30倍量阳线确认信号}
+{通达信选股指标 - MA金叉倍量阳线确认信号}
 {策略逻辑：
 1. MA3金叉MA4
 2. 金叉后出现阴线
 3. 最后一根阴线后出现倍量阳线（量能≥最后一根阴线的2倍）
 4. 倍量阳线之后再出现阳线，收盘价≥倍量阳线收盘价的99.5%
-5. 整个过程中不能出现死叉}
+5. 整个过程中不能出现死叉
+6. 放量阳线无长上引线，或确认阳线突破了放量阳线最高价}
+
+{===== 均线定义 =====}
+MA3:=MA(CLOSE,20);
+MA4:=MA(CLOSE,30);
 
 {===== 基础判断 =====}
 阳线:=CLOSE>OPEN;
@@ -70,8 +55,6 @@ YXL2:=IF(YX2,REF(VOL,2),YXL3);
 倍量阳:=距金叉天数>0 AND 距金叉天数<=10 AND
         阳线 AND VOL>=阴线量*2 AND 有阴线;
 
-
-
 {===== 第五步：记录倍量阳线信息 =====}
 {只取金叉后第一根倍量阳线}
 首倍量:=倍量阳 AND (REF(倍量阳,1)=0 AND REF(倍量阳,2)=0 AND REF(倍量阳,3)=0 AND REF(倍量阳,4)=0 AND REF(倍量阳,5)=0);
@@ -101,7 +84,16 @@ YXL2:=IF(YX2,REF(VOL,2),YXL3);
 {确认阳线收盘价是否突破放量阳线最高价}
 突破上引:=CLOSE>=首倍高;
 
-{===== 画图标记 =====}
-DRAWICON(金叉日,LOW*1,1);
-DRAWICON(买入 AND (放量长上引=0 OR 突破上引),LOW*1,42);
-DRAWICON(买入 AND 放量长上引 AND 突破上引=0,LOW*1,45);
+流通市值:=FINANCE(40) > 10000000000 AND FINANCE(40) < 100000000000;
+
+{利润保证}
+利润保证:=FINANCE(30) > 0;
+基本面:= (CODELIKE('60') OR CODELIKE('00') OR CODELIKE('30'))
+            AND NOT(NAMELIKE('ST'))
+            AND NOT(NAMELIKE('*ST'))
+			AND NOT(NAMELIKE('中'))
+            AND CLOSE>2.5;
+{===== 选股输出 =====}
+
+{买入信号且（无长上引线 或 突破上引线）}
+选股:买入 AND (放量长上引=0 OR 突破上引) AND 流通市值 AND 利润保证 AND 基本面;
