@@ -86,8 +86,8 @@ YXL2:=IF(YX2,REF(VOL,2),YXL3);
 
 流通市值:=FINANCE(40) > 10000000000 AND FINANCE(40) < 100000000000;
 
-{利润保证：扣非净利润>0 且 同比不大幅下滑}
-利润保证:=FINANCE(42) > 0 AND FINANCE(43) > -50;
+{利润保证}
+利润保证:=FINANCE(30) > 0;
 基本面:= (CODELIKE('60') OR CODELIKE('00') OR CODELIKE('30'))
             AND NOT(NAMELIKE('ST'))
             AND NOT(NAMELIKE('*ST'))
