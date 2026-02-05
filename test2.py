@@ -172,17 +172,28 @@ def main():
         if double_vol_yang_index is None:
             continue  # 没找到倍量阳线，跳过这个金叉
 
-        # 第四个条件：倍量阳线之后再出现阳线，收盘价要高于或接近倍量阳线收盘价（容差0.5%）
+        # 记录倍量阳线的高点、收盘价、低点，用于上引线判断
+        double_vol_yang_high = data[double_vol_yang_index]["high"]
+        double_vol_yang_low = data[double_vol_yang_index]["low"]
+        k_length = double_vol_yang_high - double_vol_yang_low
+        upper_shadow = double_vol_yang_high - double_vol_yang_close
+        # 上引线过长：上引线占K线长度60%以上
+        has_long_upper_shadow = k_length > 0 and (upper_shadow / k_length) >= 0.6
+
+        # 第四个条件：倍量阳线之后再出现阳线，收盘价要高于或接近倍量阳线收盘价（容差0.07%）
         for j in range(double_vol_yang_index + 1, min(double_vol_yang_index + 6, len(data))):
             # 如果j是阳线
             if closes[j] > opens[j]:
-                price_threshold = double_vol_yang_close * 0.995  # 允许低0.5%
+                price_threshold = double_vol_yang_close * 0.9993  # 允许低0.07%（与通达信一致）
                 if closes[j] >= price_threshold:
-                    buy_price = opens[j]  # 这根确认阳线当天开盘买入
-                    buy_date = dates[j]
-                    buy_index = j
-                    buy_found = True
-                    break
+                    # 上引线判断：无长上引线 或 确认阳线突破倍量阳线最高价
+                    break_upper = closes[j] >= double_vol_yang_high
+                    if not has_long_upper_shadow or break_upper:
+                        buy_price = opens[j]  # 这根确认阳线当天开盘买入
+                        buy_date = dates[j]
+                        buy_index = j
+                        buy_found = True
+                        break
 
         if not buy_found:
             continue
