@@ -163,14 +163,38 @@ def main():
 
             # 如果j是阳线
             if closes[j] > opens[j]:
-                # 检查第三个条件：j的量能是否是最后一根阴线的2倍以上
-                if last_yin_index is not None and vols[j] >= last_yin_vol * 2:
+                # 检查第三个条件：j的量能是否是最后一根阴线的2倍以上，且大于金叉日量
+                cross_day_vol = vols[i]  # 金叉日量能
+                if last_yin_index is not None and vols[j] >= last_yin_vol * 2 and vols[j] > cross_day_vol:
                     double_vol_yang_index = j
                     double_vol_yang_close = closes[j]
                     break
 
         if double_vol_yang_index is None:
             continue  # 没找到倍量阳线，跳过这个金叉
+
+        # 记录倍量阳线的量能
+        double_vol_yang_vol = vols[double_vol_yang_index]
+        cross_vol = vols[i]  # 金叉日量能
+
+        # ===== 阴线缩量判断（洗盘vs出货）=====
+        # 取金叉到倍量阳之间量最大的阴线来判断
+        max_yin_vol_between = 0
+        for k in range(i + 1, double_vol_yang_index):
+            if closes[k] < opens[k]:  # 阴线
+                if vols[k] > max_yin_vol_between:
+                    max_yin_vol_between = vols[k]
+
+        # 阴线缩量：最大阴线量 < 金叉日量的2倍
+        yin_shrink = max_yin_vol_between > 0 and max_yin_vol_between < cross_vol * 2
+        if not yin_shrink:
+            continue  # 阴线没缩量，跳过
+
+        # ===== 放量适度判断 =====
+        # 放量适度：倍量阳线量能 < 最后阴线量的6倍
+        vol_moderate = double_vol_yang_vol < last_yin_vol * 6
+        if not vol_moderate:
+            continue  # 放量过大，跳过
 
         # 记录倍量阳线的高点、收盘价、低点，用于上引线判断
         double_vol_yang_high = data[double_vol_yang_index]["high"]
@@ -180,12 +204,29 @@ def main():
         # 上引线过长：上引线占K线长度60%以上
         has_long_upper_shadow = k_length > 0 and (upper_shadow / k_length) >= 0.6
 
+        # 统计金叉到确认阳线之间所有阳线的最大量能（排除倍量阳线）
+        def get_max_yang_vol_between(start_idx, end_idx, exclude_idx):
+            """获取start_idx到end_idx之间所有阳线的最大量能（排除exclude_idx）"""
+            max_vol = 0
+            for k in range(start_idx + 1, end_idx):
+                if k == exclude_idx:
+                    continue
+                if closes[k] > opens[k]:  # 是阳线
+                    if vols[k] > max_vol:
+                        max_vol = vols[k]
+            return max_vol
+
         # 第四个条件：倍量阳线之后再出现阳线，收盘价要高于或接近倍量阳线收盘价（容差0.07%）
+        # 增加条件：确认阳线量能 > 金叉到确认阳线之间所有阳线量能（排除倍量阳线）
         for j in range(double_vol_yang_index + 1, min(double_vol_yang_index + 6, len(data))):
             # 如果j是阳线
             if closes[j] > opens[j]:
                 price_threshold = double_vol_yang_close * 0.9993  # 允许低0.07%（与通达信一致）
                 if closes[j] >= price_threshold:
+                    # 确认阳线量能达标：量能 > 金叉到确认阳之间所有阳线（排除倍量阳）
+                    max_yang_vol = get_max_yang_vol_between(i, j, double_vol_yang_index)
+                    if vols[j] <= max_yang_vol:
+                        continue  # 量能不达标，跳过
                     # 上引线判断：无长上引线 或 确认阳线突破倍量阳线最高价
                     break_upper = closes[j] >= double_vol_yang_high
                     if not has_long_upper_shadow or break_upper:
