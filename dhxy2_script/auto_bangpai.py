@@ -131,7 +131,7 @@ def send_alt_q():
     time.sleep(1)  # 等待界面打开
 
 def find_image_on_screen(template_path, confidence=0.8):
-    """在屏幕上查找图像，返回中心坐标"""
+    """在屏幕上查找图像，返回中心坐标。支持偏色和多尺度匹配。"""
     if not os.path.exists(template_path):
         print(f"  错误: 模板图像不存在 {template_path}")
         return None
@@ -139,26 +139,71 @@ def find_image_on_screen(template_path, confidence=0.8):
     # 截取屏幕
     screenshot = ImageGrab.grab()
     screenshot_np = np.array(screenshot)
-    screenshot_gray = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2GRAY)
 
-    # 读取模板
-    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-    if template is None:
+    # 读取模板（彩色）
+    template_bgr = cv2.imread(template_path)
+    if template_bgr is None:
         print(f"  错误: 无法读取模板 {template_path}")
         return None
 
-    # 模板匹配
-    result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_CCOEFF_NORMED)
-    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+    # 缩放范围：0.7x ~ 1.3x，步长0.1
+    scales = [round(s, 1) for s in np.arange(0.7, 1.35, 0.1)]
 
-    if max_val >= confidence:
-        h, w = template.shape
-        center_x = max_loc[0] + w // 2
-        center_y = max_loc[1] + h // 2
-        print(f"  找到图像! 置信度: {max_val:.2f}, 位置: ({center_x}, {center_y})")
+    best_val = -1
+    best_loc = None
+    best_w = 0
+    best_h = 0
+    best_scale = 1.0
+    best_method = ""
+
+    # 预处理截图：灰度 + 边缘
+    screenshot_gray = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2GRAY)
+    screenshot_edges = cv2.Canny(screenshot_gray, 50, 150)
+
+    # 预处理模板原始尺寸：灰度 + 边缘
+    template_rgb = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2RGB)
+    template_gray_orig = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2GRAY)
+    template_edges_orig = cv2.Canny(template_gray_orig, 50, 150)
+
+    for scale in scales:
+        # 缩放模板
+        new_w = int(template_bgr.shape[1] * scale)
+        new_h = int(template_bgr.shape[0] * scale)
+        if new_w < 5 or new_h < 5:
+            continue
+        if new_w > screenshot_np.shape[1] or new_h > screenshot_np.shape[0]:
+            continue
+
+        template_gray = cv2.resize(template_gray_orig, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        template_edges = cv2.resize(template_edges_orig, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        # 方法1: 灰度模板匹配（应对轻微偏色）
+        result = cv2.matchTemplate(screenshot_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        if max_val > best_val:
+            best_val = max_val
+            best_loc = max_loc
+            best_w, best_h = new_w, new_h
+            best_scale = scale
+            best_method = "灰度匹配"
+
+        # 方法2: 边缘匹配（抗偏色，只关注轮廓）
+        result_edge = cv2.matchTemplate(screenshot_edges, template_edges, cv2.TM_CCOEFF_NORMED)
+        _, max_val_e, _, max_loc_e = cv2.minMaxLoc(result_edge)
+        if max_val_e > best_val:
+            best_val = max_val_e
+            best_loc = max_loc_e
+            best_w, best_h = new_w, new_h
+            best_scale = scale
+            best_method = "边缘匹配"
+
+    if best_val >= confidence:
+        center_x = best_loc[0] + best_w // 2
+        center_y = best_loc[1] + best_h // 2
+        print(f"  找到图像! [{best_method}] 置信度: {best_val:.2f}, 缩放: {best_scale:.1f}x, 位置: ({center_x}, {center_y})")
         return (center_x, center_y)
     else:
-        print(f"  未找到图像, 最高置信度: {max_val:.2f}")
+        print(f"  未找到图像, 最高置信度: {best_val:.2f} [{best_method}]")
         return None
 
 def check_if_daily_task_expanded():

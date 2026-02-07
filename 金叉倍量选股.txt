@@ -26,8 +26,18 @@ MA4:=MA(CLOSE,30);
 距死叉天数:=BARSLAST(死叉日);
 金叉后无死叉:=距金叉天数<距死叉天数;
 
-{===== 第三步：金叉后寻找最后一根阴线的成交量 =====}
+{===== 第三步：金叉后寻找最后一根阴线的成交量（回看20天）=====}
 {条件：N天前是阴线，且N < 距金叉天数（确保在本次金叉之后）}
+YX20:=20<距金叉天数 AND REF(阴线,20);
+YX19:=19<距金叉天数 AND REF(阴线,19);
+YX18:=18<距金叉天数 AND REF(阴线,18);
+YX17:=17<距金叉天数 AND REF(阴线,17);
+YX16:=16<距金叉天数 AND REF(阴线,16);
+YX15:=15<距金叉天数 AND REF(阴线,15);
+YX14:=14<距金叉天数 AND REF(阴线,14);
+YX13:=13<距金叉天数 AND REF(阴线,13);
+YX12:=12<距金叉天数 AND REF(阴线,12);
+YX11:=11<距金叉天数 AND REF(阴线,11);
 YX10:=10<距金叉天数 AND REF(阴线,10);
 YX9:=9<距金叉天数 AND REF(阴线,9);
 YX8:=8<距金叉天数 AND REF(阴线,8);
@@ -40,7 +50,17 @@ YX2:=2<距金叉天数 AND REF(阴线,2);
 YX1:=1<距金叉天数 AND REF(阴线,1);
 
 {从远到近取值，最近的阴线覆盖之前的}
-YXL10:=IF(YX10,REF(VOL,10),0);
+YXL20:=IF(YX20,REF(VOL,20),0);
+YXL19:=IF(YX19,REF(VOL,19),YXL20);
+YXL18:=IF(YX18,REF(VOL,18),YXL19);
+YXL17:=IF(YX17,REF(VOL,17),YXL18);
+YXL16:=IF(YX16,REF(VOL,16),YXL17);
+YXL15:=IF(YX15,REF(VOL,15),YXL16);
+YXL14:=IF(YX14,REF(VOL,14),YXL15);
+YXL13:=IF(YX13,REF(VOL,13),YXL14);
+YXL12:=IF(YX12,REF(VOL,12),YXL13);
+YXL11:=IF(YX11,REF(VOL,11),YXL12);
+YXL10:=IF(YX10,REF(VOL,10),YXL11);
 YXL9:=IF(YX9,REF(VOL,9),YXL10);
 YXL8:=IF(YX8,REF(VOL,8),YXL9);
 YXL7:=IF(YX7,REF(VOL,7),YXL8);
@@ -55,24 +75,35 @@ YXL2:=IF(YX2,REF(VOL,2),YXL3);
 
 {===== 第四步：当前是倍量阳线（量≥阴线2倍，且>金叉日量）=====}
 金叉日量:=REF(VOL,距金叉天数);
-倍量阳:=距金叉天数>0 AND 距金叉天数<=10 AND
+倍量阳:=距金叉天数>0 AND 距金叉天数<=20 AND
         阳线 AND VOL>=阴线量*2 AND VOL>金叉日量 AND 有阴线;
 
 {===== 第五步：记录倍量阳线信息 =====}
 {只取金叉后第一根倍量阳线}
-首倍量:=倍量阳 AND (REF(倍量阳,1)=0 AND REF(倍量阳,2)=0 AND REF(倍量阳,3)=0 AND REF(倍量阳,4)=0 AND REF(倍量阳,5)=0);
+首倍量:=倍量阳 AND (REF(倍量阳,1)=0 AND REF(倍量阳,2)=0 AND REF(倍量阳,3)=0 AND REF(倍量阳,4)=0 AND REF(倍量阳,5)=0 AND REF(倍量阳,6)=0 AND REF(倍量阳,7)=0 AND REF(倍量阳,8)=0 AND REF(倍量阳,9)=0 AND REF(倍量阳,10)=0);
 距首倍:=BARSLAST(首倍量);
 首倍价:=REF(CLOSE,距首倍);
 首倍量能:=REF(VOL,距首倍);
 
-{放量适度：2-6倍为佳，超过6倍可能是出货}
+{放量适度：2-6倍为佳，超过6倍可能是出货（用最近阴线量判断）}
 放量适度:=首倍量能 < 阴线量*6;
+放量过大:=首倍量能 >= 阴线量*6;
 
 {===== 阴线缩量判断（洗盘vs出货）=====}
 {取金叉到放量阳之间量最大的阴线来判断}
 间隔天数:=距金叉天数 - 距首倍;
 
-{金叉到放量阳之间，每根阴线的量（不是阴线则为0）}
+{金叉到放量阳之间，每根阴线的量（不是阴线则为0，回看20天）}
+YXM20:=IF(20<间隔天数 AND REF(阴线,距首倍+20), REF(VOL,距首倍+20), 0);
+YXM19:=IF(19<间隔天数 AND REF(阴线,距首倍+19), REF(VOL,距首倍+19), 0);
+YXM18:=IF(18<间隔天数 AND REF(阴线,距首倍+18), REF(VOL,距首倍+18), 0);
+YXM17:=IF(17<间隔天数 AND REF(阴线,距首倍+17), REF(VOL,距首倍+17), 0);
+YXM16:=IF(16<间隔天数 AND REF(阴线,距首倍+16), REF(VOL,距首倍+16), 0);
+YXM15:=IF(15<间隔天数 AND REF(阴线,距首倍+15), REF(VOL,距首倍+15), 0);
+YXM14:=IF(14<间隔天数 AND REF(阴线,距首倍+14), REF(VOL,距首倍+14), 0);
+YXM13:=IF(13<间隔天数 AND REF(阴线,距首倍+13), REF(VOL,距首倍+13), 0);
+YXM12:=IF(12<间隔天数 AND REF(阴线,距首倍+12), REF(VOL,距首倍+12), 0);
+YXM11:=IF(11<间隔天数 AND REF(阴线,距首倍+11), REF(VOL,距首倍+11), 0);
 YXM10:=IF(10<间隔天数 AND REF(阴线,距首倍+10), REF(VOL,距首倍+10), 0);
 YXM9:=IF(9<间隔天数 AND REF(阴线,距首倍+9), REF(VOL,距首倍+9), 0);
 YXM8:=IF(8<间隔天数 AND REF(阴线,距首倍+8), REF(VOL,距首倍+8), 0);
@@ -85,7 +116,7 @@ YXM2:=IF(2<间隔天数 AND REF(阴线,距首倍+2), REF(VOL,距首倍+2), 0);
 YXM1:=IF(1<=间隔天数 AND REF(阴线,距首倍+1), REF(VOL,距首倍+1), 0);
 
 {取最大阴线量}
-最大阴线量:=MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(YXM1,YXM2),YXM3),YXM4),YXM5),YXM6),YXM7),YXM8),YXM9),YXM10);
+最大阴线量:=MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(YXM1,YXM2),YXM3),YXM4),YXM5),YXM6),YXM7),YXM8),YXM9),YXM10),YXM11),YXM12),YXM13),YXM14),YXM15),YXM16),YXM17),YXM18),YXM19),YXM20);
 
 {阴线缩量：最大阴线量 < 金叉当日量的2倍（说明回调期间没有大卖盘）}
 阴线缩量:=最大阴线量>0 AND 最大阴线量 < 金叉日量*2;
@@ -93,6 +124,16 @@ YXM1:=IF(1<=间隔天数 AND REF(阴线,距首倍+1), REF(VOL,距首倍+1), 0);
 {===== 金叉到确认阳线之间的阳线量能（排除倍量阳线）=====}
 {统计金叉后、当前K线之前的所有阳线量能（不含倍量阳线那根）}
 {N天前是阳线且不是倍量阳线那天，则取其量能，否则为0}
+QRY20:=IF(20<距金叉天数 AND 20<>距首倍 AND REF(阳线,20), REF(VOL,20), 0);
+QRY19:=IF(19<距金叉天数 AND 19<>距首倍 AND REF(阳线,19), REF(VOL,19), 0);
+QRY18:=IF(18<距金叉天数 AND 18<>距首倍 AND REF(阳线,18), REF(VOL,18), 0);
+QRY17:=IF(17<距金叉天数 AND 17<>距首倍 AND REF(阳线,17), REF(VOL,17), 0);
+QRY16:=IF(16<距金叉天数 AND 16<>距首倍 AND REF(阳线,16), REF(VOL,16), 0);
+QRY15:=IF(15<距金叉天数 AND 15<>距首倍 AND REF(阳线,15), REF(VOL,15), 0);
+QRY14:=IF(14<距金叉天数 AND 14<>距首倍 AND REF(阳线,14), REF(VOL,14), 0);
+QRY13:=IF(13<距金叉天数 AND 13<>距首倍 AND REF(阳线,13), REF(VOL,13), 0);
+QRY12:=IF(12<距金叉天数 AND 12<>距首倍 AND REF(阳线,12), REF(VOL,12), 0);
+QRY11:=IF(11<距金叉天数 AND 11<>距首倍 AND REF(阳线,11), REF(VOL,11), 0);
 QRY10:=IF(10<距金叉天数 AND 10<>距首倍 AND REF(阳线,10), REF(VOL,10), 0);
 QRY9:=IF(9<距金叉天数 AND 9<>距首倍 AND REF(阳线,9), REF(VOL,9), 0);
 QRY8:=IF(8<距金叉天数 AND 8<>距首倍 AND REF(阳线,8), REF(VOL,8), 0);
@@ -105,16 +146,17 @@ QRY2:=IF(2<距金叉天数 AND 2<>距首倍 AND REF(阳线,2), REF(VOL,2), 0);
 QRY1:=IF(1<距金叉天数 AND 1<>距首倍 AND REF(阳线,1), REF(VOL,1), 0);
 
 {取最大阳线量（排除倍量阳线）}
-最大阳线量:=MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(QRY1,QRY2),QRY3),QRY4),QRY5),QRY6),QRY7),QRY8),QRY9),QRY10);
+最大阳线量:=MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(QRY1,QRY2),QRY3),QRY4),QRY5),QRY6),QRY7),QRY8),QRY9),QRY10),QRY11),QRY12),QRY13),QRY14),QRY15),QRY16),QRY17),QRY18),QRY19),QRY20);
 
 {确认阳线量能必须大于之前所有阳线量能}
 确认量能达标:=VOL>最大阳线量;
 
 {===== 第六步：确认阳线判断 =====}
-{条件：1-5天前出现过首根倍量阳线，当前是阳线，收盘价>=首根倍量阳线收盘价的99.93%（允许低0.07%）}
+{条件：1-5天前出现过首根倍量阳线，当前是阳线，收盘价>=首根倍量阳线收盘价的容差比例}
 {首倍量必须在本次金叉之后（距首倍 < 距金叉天数）}
+{选股指标固定用日线容差9993}
 {增加条件：确认阳线量能 > 金叉到确认阳线之间所有阳线量能（排除倍量阳线）}
-确认阳:=距首倍>=1 AND 距首倍<=5 AND 距首倍<距金叉天数 AND 阳线 AND CLOSE>=首倍价*0.9993 AND 确认量能达标;
+确认阳:=距首倍>=1 AND 距首倍<=5 AND 距首倍<距金叉天数 AND 阳线 AND CLOSE*10000>=首倍价*9993 AND 确认量能达标;
 
 {===== 第七步：只取首次确认阳线 =====}
 {本次金叉后第一次满足确认阳线条件}
@@ -123,6 +165,7 @@ QRY1:=IF(1<距金叉天数 AND 1<>距首倍 AND REF(阳线,1), REF(VOL,1), 0);
 {===== 综合买入信号 =====}
 买入基础:=首次确认 AND 金叉后无死叉;
 买入:=买入基础 AND 阴线缩量 AND 放量适度;
+买入爆量:=买入基础 AND 阴线缩量 AND 放量过大;
 
 流通市值:=FINANCE(40) > 10000000000 AND FINANCE(40) < 100000000000;
 

@@ -11,6 +11,22 @@ def get_market_prefix(code):
     else:
         raise ValueError("无法识别的股票代码（应为6位数字，如600835或000831）")
 
+def fetch_stock_name(code):
+    """从新浪获取股票名称"""
+    prefix = get_market_prefix(code)
+    url = f"https://hq.sinajs.cn/list={prefix}{code}"
+    try:
+        req = urllib.request.Request(url, headers={"Referer": "https://finance.sina.com.cn"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            text = r.read().decode("gbk")
+            # 格式: var hq_str_sh600835="上海机电,..."
+            parts = text.split('"')
+            if len(parts) >= 2 and parts[1]:
+                return parts[1].split(',')[0]
+    except Exception:
+        pass
+    return None
+
 def fetch_kline(code, days=1500):
     """从新浪获取K线数据（旧到新）"""
     prefix = get_market_prefix(code)
@@ -77,7 +93,10 @@ def main():
     opens = [d["open"] for d in data]
     vols = [d["volume"] for d in data]
 
-    print(f"\n📊 股票代码: {STOCK_CODE} | 数据范围: {dates[0]} 至 {dates[-1]}")
+    # 获取股票名称
+    stock_name = fetch_stock_name(STOCK_CODE) or "未知"
+
+    print(f"\n📊 {stock_name}（{STOCK_CODE}） | 数据范围: {dates[0]} 至 {dates[-1]}")
 
     # ===== 第一步：找出所有金叉日 =====
     golden_crosses = []
@@ -120,9 +139,9 @@ def main():
         buy_index = None
 
         # 检查在整个搜索过程中是否出现死叉（MA20下穿MA30）
-        # 搜索范围：从金叉后一天到最多15天（覆盖所有可能的确认阳线搜索范围）
+        # 搜索范围：从金叉后一天到最多26天（覆盖20天倍量阳窗口+确认阳线5天）
         has_death_cross = False
-        search_end = min(i + 16, len(data))
+        search_end = min(i + 26, len(data))
         for j in range(i + 1, search_end):
             ma20_current = safe_ma(closes, 20, j)
             ma30_current = safe_ma(closes, 30, j)
@@ -138,9 +157,9 @@ def main():
         if has_death_cross:
             continue  # 如果出现死叉，这个金叉作废
 
-        # 第二个条件：寻找金叉后是否有阴线
+        # 第二个条件：寻找金叉后是否有阴线（窗口20天）
         has_yin_after_cross = False
-        for j in range(i + 1, min(i + 11, len(data))):
+        for j in range(i + 1, min(i + 21, len(data))):
             if closes[j] < opens[j]:  # 找到阴线
                 has_yin_after_cross = True
                 break
@@ -148,11 +167,11 @@ def main():
         if not has_yin_after_cross:
             continue  # 如果金叉后没有阴线，跳过这个金叉
 
-        # 第三个条件：找最后一根阴线，然后找它后面的倍量阳线
+        # 第三个条件：找最后一根阴线，然后找它后面的倍量阳线（窗口20天）
         double_vol_yang_index = None
         double_vol_yang_close = None
 
-        for j in range(i + 1, min(i + 11, len(data))):
+        for j in range(i + 1, min(i + 21, len(data))):
             # 找到金叉后从i+1到j-1的最后一根阴线
             last_yin_index = None
             last_yin_vol = 0
@@ -193,16 +212,8 @@ def main():
         # ===== 放量适度判断 =====
         # 放量适度：倍量阳线量能 < 最后阴线量的6倍
         vol_moderate = double_vol_yang_vol < last_yin_vol * 6
-        if not vol_moderate:
-            continue  # 放量过大，跳过
-
-        # 记录倍量阳线的高点、收盘价、低点，用于上引线判断
-        double_vol_yang_high = data[double_vol_yang_index]["high"]
-        double_vol_yang_low = data[double_vol_yang_index]["low"]
-        k_length = double_vol_yang_high - double_vol_yang_low
-        upper_shadow = double_vol_yang_high - double_vol_yang_close
-        # 上引线过长：上引线占K线长度60%以上
-        has_long_upper_shadow = k_length > 0 and (upper_shadow / k_length) >= 0.6
+        # 放量过大不跳过，标记为爆量信号
+        is_explode_vol = not vol_moderate
 
         # 统计金叉到确认阳线之间所有阳线的最大量能（排除倍量阳线）
         def get_max_yang_vol_between(start_idx, end_idx, exclude_idx):
@@ -227,14 +238,11 @@ def main():
                     max_yang_vol = get_max_yang_vol_between(i, j, double_vol_yang_index)
                     if vols[j] <= max_yang_vol:
                         continue  # 量能不达标，跳过
-                    # 上引线判断：无长上引线 或 确认阳线突破倍量阳线最高价
-                    break_upper = closes[j] >= double_vol_yang_high
-                    if not has_long_upper_shadow or break_upper:
-                        buy_price = opens[j]  # 这根确认阳线当天开盘买入
-                        buy_date = dates[j]
-                        buy_index = j
-                        buy_found = True
-                        break
+                    buy_price = closes[j]  # 确认阳线收盘价买入
+                    buy_date = dates[j]
+                    buy_index = j
+                    buy_found = True
+                    break
 
         if not buy_found:
             continue
@@ -271,7 +279,8 @@ def main():
             "buy_price": buy_price,
             "max_gain": max_gain,
             "hit_day": hit_day,
-            "level": level
+            "level": level,
+            "is_explode_vol": is_explode_vol  # 是否爆量信号
         })
 
         if len(signals) >= MAX_SIGNALS:
@@ -286,8 +295,9 @@ def main():
     print(f"\n✅ 找到 {len(signals)} 个有效交易信号（含确认阳线）：\n")
 
     for idx, s in enumerate(signals, 1):
-        print(f"第 {idx} 次信号")
-        print(f"  金叉日期: {s['cross_date']}")      # ← 关键：这里显示真正的金叉日
+        signal_type = "爆量" if s["is_explode_vol"] else "正常"
+        print(f"第 {idx} 次信号 [{signal_type}]")
+        print(f"  金叉日期: {s['cross_date']}")
         print(f"  买入日期: {s['buy_date']}")
         print(f"  买入价: {s['buy_price']:.2f}")
         print(f"  最大涨幅: {s['max_gain']:.2f}%")
