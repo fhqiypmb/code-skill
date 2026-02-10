@@ -213,6 +213,30 @@ _SOURCES_MINUTE = [SinaKline, EastmoneyKline]
 _SOURCES_DAILY = [SinaKline, EastmoneyKline, TencentKline, THSKline]
 
 
+# 限流计数器（线程安全）
+_throttle_counts = {}  # {数据源名: 次数}
+_throttle_lock = threading.Lock()
+
+
+def _record_throttle(src_name: str):
+    with _throttle_lock:
+        _throttle_counts[src_name] = _throttle_counts.get(src_name, 0) + 1
+
+
+def get_throttle_summary() -> str:
+    """返回限流统计摘要，无限流返回空字符串"""
+    with _throttle_lock:
+        if not _throttle_counts:
+            return ""
+        parts = [f"{name} {cnt}次" for name, cnt in _throttle_counts.items()]
+        return "数据源限流: " + ", ".join(parts)
+
+
+def reset_throttle_counts():
+    with _throttle_lock:
+        _throttle_counts.clear()
+
+
 def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
                               datalen: int = 1500) -> List[Dict]:
     """
@@ -229,7 +253,11 @@ def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
             data = src.fetch(code, period, datalen)
             if data and len(data) > 30:
                 return data
-        except Exception:
+        except Exception as e:
+            err_str = str(e)
+            # 检测限流：HTTP 456(新浪)、连接断开(东财)、403等
+            if '456' in err_str or 'RemoteDisconnected' in err_str or '403' in err_str or '429' in err_str:
+                _record_throttle(src.__name__)
             continue
     return []
 
@@ -564,6 +592,32 @@ class StrictStockScreener:
 
         return stocks
 
+    def _check_sources(self):
+        """开始前测试各数据源是否可用"""
+        is_minute = self.period in ('1min', '5min', '15min', '30min', '60min')
+        sources = _SOURCES_MINUTE if is_minute else _SOURCES_DAILY
+        test_code = '000001'  # 用平安银行测试
+        ok_list = []
+        fail_list = []
+        for src in sources:
+            try:
+                data = src.fetch(test_code, self.period, 50)
+                if data and len(data) > 10:
+                    ok_list.append(src.__name__)
+                else:
+                    fail_list.append((src.__name__, '返回数据为空'))
+            except Exception as e:
+                err = str(e)
+                if '456' in err:
+                    fail_list.append((src.__name__, '限流(456)'))
+                elif 'RemoteDisconnected' in err:
+                    fail_list.append((src.__name__, '连接被断开'))
+                elif '403' in err:
+                    fail_list.append((src.__name__, '拒绝访问(403)'))
+                else:
+                    fail_list.append((src.__name__, err[:40]))
+        return ok_list, fail_list
+
     def screen_all_stocks(self, stock_list: List[Tuple[str, str]]):
         """并行批量选股 - 多数据源分散请求"""
         total = len(stock_list)
@@ -574,6 +628,19 @@ class StrictStockScreener:
         print(f"  严格选股程序 - 周期: {self.period_name}")
         print(f"  待分析: {total} 只股票")
         print(f"  并行线程: {self.max_workers}  数据源: {num_sources}个")
+
+        # 测试数据源可用性
+        ok_list, fail_list = self._check_sources()
+        if ok_list:
+            print(f"  ✔ 可用: {', '.join(ok_list)}")
+        if fail_list:
+            for name, reason in fail_list:
+                print(f"  ✘ 不可用: {name} - {reason}")
+        if not ok_list:
+            print(f"  ⚠ 所有数据源均不可用，无法选股！")
+            print(f"{'=' * 80}\n")
+            return [], []
+
         print(f"{'=' * 80}\n")
 
         normal_results = []
