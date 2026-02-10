@@ -356,15 +356,21 @@ class StrictStockScreener:
             if dist_gold >= dist_dead:
                 return False, False, {}
 
-        # ===== 第三步：金叉后寻找最后一根阴线的成交量（回看20天）=====
-        yin_vol = 0
-        for offset in range(20, 0, -1):
-            check_idx = idx - offset
-            if check_idx < 0:
-                continue
-            if offset < dist_gold and data[check_idx]['is_yin']:
-                yin_vol = data[check_idx]['volume']
+        # ===== 第三步：计算阴线量的辅助函数（对齐通达信逐K线独立计算）=====
+        def calc_yin_vol_at(pos):
+            """在pos位置独立计算阴线量：从pos往前回看20根，找金叉后最近的阴线"""
+            dist = pos - gold_cross_idx
+            yv = 0
+            for off in range(20, 0, -1):
+                ci = pos - off
+                if ci < 0:
+                    continue
+                if off < dist and data[ci]['is_yin']:
+                    yv = data[ci]['volume']
+            return yv
 
+        # 当前K线的阴线量
+        yin_vol = calc_yin_vol_at(idx)
         has_yin = yin_vol > 0
         if not has_yin:
             return False, False, {}
@@ -381,15 +387,16 @@ class StrictStockScreener:
 
         gold_vol_enough = gold_day_vol > max_yin_vol_before_gold
 
-        # ===== 第五步：检查倍量阳线 =====
+        # ===== 第五步：检查倍量阳线（每根K线独立计算阴线量，对齐通达信）=====
         double_vol_yang_flags = []
         for k in range(gold_cross_idx + 1, idx + 1):
             k_dist_gold = k - gold_cross_idx
+            k_yin_vol = calc_yin_vol_at(k)
             if (k_dist_gold > 0 and k_dist_gold <= 20 and
                     data[k]['is_yang'] and
-                    data[k]['volume'] >= yin_vol * 2 and
-                    data[k]['volume'] > gold_day_vol and
-                    has_yin):
+                    k_yin_vol > 0 and
+                    data[k]['volume'] >= k_yin_vol * 2 and
+                    data[k]['volume'] > gold_day_vol):
                 double_vol_yang_flags.append(k)
 
         # 找首根倍量阳线（前10根K线都不是倍量阳的那根）
