@@ -18,7 +18,7 @@
 用法：
   python 严格选股_多周期.py
 
-注意：请先运行 "python 更新股票列表.py" 或 "python 更新股票列表_同花顺.py" 生成 stock_list.md 文件
+注意：请先运行 "python 更新股票列表.py" 生成 stock_list.md 文件
 """
 
 import os
@@ -53,10 +53,23 @@ class StrictStockScreener:
         '8': ('monthly', '月线', 240),
     }
 
+    # 容差映射（对齐通达信PERIOD: 0-1min 1-5min 2-15min 3-30min 4-60min 5-日 6-周 7-月）
+    TOLERANCE_MAP = {
+        '1min': 9999,
+        '5min': 9998,
+        '15min': 9997,
+        '30min': 9996,
+        '60min': 9995,
+        '240min': 9993,
+        'weekly': 9990,
+        'monthly': 9985,
+    }
+
     def __init__(self, period: str = '240min', period_name: str = '日线'):
         self.period = period
         self.period_name = period_name
         self.scale = self._get_scale()
+        self.tolerance = self.TOLERANCE_MAP.get(period, 9993)
         self.ma_short = 20  # MA3 in 通达信
         self.ma_long = 30   # MA4 in 通达信
 
@@ -295,8 +308,8 @@ class StrictStockScreener:
         if dist_first_double >= dist_gold:
             return False, False, {}
 
-        # 条件3：阳线 且 收盘价*10000 >= 首倍价*9993
-        if curr['close'] * 10000 < first_double_price * 9993:
+        # 条件3：阳线 且 收盘价*10000 >= 首倍价*容差（按周期动态调整）
+        if curr['close'] * 10000 < first_double_price * self.tolerance:
             return False, False, {}
 
         # 条件4：确认量能达标 - 量能 > 金叉到确认阳线之间所有阳线量能（排除倍量阳）
@@ -327,7 +340,7 @@ class StrictStockScreener:
                 continue
 
             # 收盘价条件
-            if data[check_i]['close'] * 10000 < first_double_price * 9993:
+            if data[check_i]['close'] * 10000 < first_double_price * self.tolerance:
                 continue
 
             # 量能达标
@@ -399,7 +412,7 @@ class StrictStockScreener:
 
         if not os.path.exists(md_file):
             print(f"错误: 找不到股票列表文件 {md_file}")
-            print("请先运行: python 更新股票列表.py 或 python 更新股票列表_同花顺.py")
+            print("请先运行: python 更新股票列表.py")
             sys.exit(1)
 
         stocks = []
