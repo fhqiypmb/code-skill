@@ -3,17 +3,19 @@
 基于通达信严格选股指标：MA金叉倍量阳线确认信号（严格版）
 支持周期：1分钟、5分钟、15分钟、30分钟、60分钟、日、周、月
 
-核心逻辑（完全对齐严格选股.txt）：
+核心逻辑（完全对齐金叉.txt）：
   1. MA20金叉MA30
   2. 金叉后出现阴线（20天窗口内）
   3. 最后一根阴线后出现倍量阳线（量能>=最后阴线的2倍，且>金叉日量）
-  4. 倍量阳线后1-5天内出现确认阳线，收盘价>=倍量阳线收盘价*0.9993
+  4. 倍量阳线后1-5天内出现确认阳线，收盘价>=倍量阳线收盘价*容差（按周期动态调整）
   5. 确认阳线量能 > 金叉到确认阳之间所有阳线量能（排除倍量阳）
   6. 整个过程中不能出现死叉
   7. 阴线缩量判断（普通/严格两级）
   8. 放量适度（2-6倍，超过6倍标记为爆量）
   9. 金叉日量能大于前7日最大阴线量能（严格买入条件）
   10. 只取首次确认阳线（首次确认）
+
+数据源：新浪财经、东方财富、腾讯财经、同花顺（多源并行，自动负载分散）
 
 用法：
   python 严格选股_多周期.py
@@ -26,21 +28,216 @@ import urllib.request
 import json
 import sys
 import re
+import ssl
 import time
+import threading
 from typing import Dict, List, Tuple, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 禁用代理（避免代理软件干扰国内API请求）
 for _key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
     if _key in os.environ:
         del os.environ[_key]
 
+# 忽略SSL证书验证
+ssl._create_default_https_context = ssl._create_unverified_context
+
 # 创建无代理的opener（全局复用）
 _proxy_handler = urllib.request.ProxyHandler({})
 _opener = urllib.request.build_opener(_proxy_handler)
 
+# 线程安全的打印锁
+_print_lock = threading.Lock()
+
+
+# ==================== 多数据源K线获取 ====================
+
+class KlineSource:
+    """K线数据源基类"""
+
+    @staticmethod
+    def get_market_prefix(code: str) -> str:
+        if code.startswith(('6', '9')):
+            return 'sh'
+        return 'sz'
+
+    @staticmethod
+    def _request(url: str, headers: dict, timeout: int = 12) -> bytes:
+        req = urllib.request.Request(url, headers=headers)
+        with _opener.open(req, timeout=timeout) as r:
+            return r.read()
+
+
+class SinaKline(KlineSource):
+    """新浪财经K线"""
+
+    SCALE_MAP = {
+        '1min': 1, '5min': 5, '15min': 15, '30min': 30,
+        '60min': 60, '240min': 240, 'weekly': 240, 'monthly': 240,
+    }
+
+    @classmethod
+    def fetch(cls, code: str, period: str, datalen: int = 1500) -> List[Dict]:
+        prefix = cls.get_market_prefix(code)
+        scale = cls.SCALE_MAP.get(period, 240)
+        url = (
+            "https://quotes.sina.cn/cn/api/json_v2.php/"
+            "CN_MarketDataService.getKLineData"
+            f"?symbol={prefix}{code}&scale={scale}&ma=no&datalen={datalen}"
+        )
+        raw = cls._request(url, {
+            "Referer": "https://finance.sina.com.cn",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        })
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, list):
+            return []
+        return [{"day": d["day"], "open": d["open"], "high": d["high"],
+                 "low": d["low"], "close": d["close"], "volume": d["volume"]}
+                for d in data]
+
+
+class EastmoneyKline(KlineSource):
+    """东方财富K线"""
+
+    KLT_MAP = {
+        '1min': 1, '5min': 5, '15min': 15, '30min': 30,
+        '60min': 60, '240min': 101, 'weekly': 102, 'monthly': 103,
+    }
+
+    @classmethod
+    def fetch(cls, code: str, period: str, datalen: int = 1500) -> List[Dict]:
+        market = 1 if code.startswith('6') else 0
+        klt = cls.KLT_MAP.get(period, 101)
+        url = (
+            f"https://push2his.eastmoney.com/api/qt/stock/kline/get?"
+            f"secid={market}.{code}"
+            f"&fields1=f1,f2,f3,f4,f5,f6"
+            f"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
+            f"&klt={klt}&fqt=1&end=20500101&lmt={datalen}"
+            f"&_={int(time.time()*1000)}"
+        )
+        raw = cls._request(url, {
+            "Referer": "https://quote.eastmoney.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        })
+        resp = json.loads(raw.decode("utf-8"))
+        klines = resp.get('data', {}).get('klines', []) if resp.get('data') else []
+        result = []
+        for line in klines:
+            parts = line.split(',')
+            if len(parts) >= 6:
+                result.append({
+                    "day": parts[0], "open": parts[1], "high": parts[3],
+                    "low": parts[4], "close": parts[2], "volume": parts[5],
+                })
+        return result
+
+
+class TencentKline(KlineSource):
+    """腾讯财经K线（日线/周线/月线）"""
+
+    KTYPE_MAP = {
+        '240min': 'day', 'weekly': 'week', 'monthly': 'month',
+    }
+
+    @classmethod
+    def fetch(cls, code: str, period: str, datalen: int = 1500) -> List[Dict]:
+        ktype = cls.KTYPE_MAP.get(period)
+        if not ktype:
+            return []  # 腾讯不支持分钟K线
+        prefix = cls.get_market_prefix(code)
+        url = (
+            f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
+            f"param={prefix}{code},{ktype},,,{datalen},qfq"
+        )
+        raw = cls._request(url, {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        })
+        resp = json.loads(raw.decode("utf-8"))
+        kdata = resp.get('data', {}).get(f'{prefix}{code}', {})
+        day_data = kdata.get(ktype, kdata.get(f'qfq{ktype}', []))
+        result = []
+        for d in day_data:
+            if len(d) >= 6:
+                result.append({
+                    "day": d[0], "open": str(d[1]), "high": str(d[3]),
+                    "low": str(d[4]), "close": str(d[2]), "volume": str(d[5]),
+                })
+        return result
+
+
+class THSKline(KlineSource):
+    """同花顺K线（仅日线/周线/月线）"""
+
+    PERIOD_CODE_MAP = {
+        '240min': '01',  # 日线
+        'weekly': '11',  # 周线
+        'monthly': '21', # 月线
+    }
+
+    @classmethod
+    def fetch(cls, code: str, period: str, datalen: int = 1500) -> List[Dict]:
+        pc = cls.PERIOD_CODE_MAP.get(period)
+        if not pc:
+            return []  # 同花顺不支持分钟K线
+        url = f"https://d.10jqka.com.cn/v6/line/hs_{code}/{pc}/last.js"
+        raw = cls._request(url, {
+            "Referer": "https://stockpage.10jqka.com.cn/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        })
+        text = raw.decode("utf-8")
+        # 解析JSONP
+        m = re.search(r'\((\{.*\})\)', text, re.DOTALL)
+        if not m:
+            return []
+        resp = json.loads(m.group(1))
+        raw_data = resp.get('data', '')
+        if not raw_data:
+            return []
+        result = []
+        for rec in raw_data.split(';'):
+            parts = rec.split(',')
+            if len(parts) >= 7 and parts[1]:
+                result.append({
+                    "day": parts[0], "open": parts[1], "high": parts[2],
+                    "low": parts[3], "close": parts[4], "volume": parts[5],
+                })
+        return result
+
+
+# 数据源列表
+# 分钟线：新浪、东方财富（腾讯/同花顺不支持分钟K线）
+# 日线/周线/月线：新浪、东方财富、腾讯、同花顺
+_SOURCES_MINUTE = [SinaKline, EastmoneyKline]
+_SOURCES_DAILY = [SinaKline, EastmoneyKline, TencentKline, THSKline]
+
+
+def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
+                              datalen: int = 1500) -> List[Dict]:
+    """
+    从指定数据源获取K线，失败自动切换下一个数据源。
+    source_idx 用于在多线程中分散到不同数据源。
+    """
+    is_minute = period in ('1min', '5min', '15min', '30min', '60min')
+    sources = _SOURCES_MINUTE if is_minute else _SOURCES_DAILY
+
+    order = [sources[(source_idx + i) % len(sources)] for i in range(len(sources))]
+
+    for src in order:
+        try:
+            data = src.fetch(code, period, datalen)
+            if data and len(data) > 30:
+                return data
+        except Exception:
+            continue
+    return []
+
+
+# ==================== 选股核心逻辑 ====================
 
 class StrictStockScreener:
-    """严格选股器 - 多周期支持，核心逻辑对齐通达信严格选股.txt"""
+    """严格选股器 - 多周期支持，核心逻辑对齐通达信金叉.txt"""
 
     PERIOD_MAP = {
         '1': ('1min', '1分钟线', 1),
@@ -65,50 +262,14 @@ class StrictStockScreener:
         'monthly': 9985,
     }
 
-    def __init__(self, period: str = '240min', period_name: str = '日线'):
+    def __init__(self, period: str = '240min', period_name: str = '日线',
+                 max_workers: int = 8):
         self.period = period
         self.period_name = period_name
-        self.scale = self._get_scale()
         self.tolerance = self.TOLERANCE_MAP.get(period, 9993)
         self.ma_short = 20  # MA3 in 通达信
         self.ma_long = 30   # MA4 in 通达信
-
-    def _get_scale(self):
-        """获取新浪scale参数"""
-        for key, (period, name, scale) in self.PERIOD_MAP.items():
-            if period == self.period:
-                return scale
-        return 240
-
-    @staticmethod
-    def get_market_prefix(code: str) -> str:
-        """根据股票代码判断市场前缀"""
-        if code.startswith(('6', '9')):
-            return 'sh'
-        elif code.startswith(('0', '3')):
-            return 'sz'
-        return 'sh'
-
-    def fetch_kline(self, code: str, days: int = 1500) -> List[Dict]:
-        """从新浪获取K线数据（使用无代理连接）"""
-        prefix = self.get_market_prefix(code)
-        url = (
-            "https://quotes.sina.cn/cn/api/json_v2.php/"
-            "CN_MarketDataService.getKLineData"
-            f"?symbol={prefix}{code}&scale={self.scale}&ma=no&datalen={days}"
-        )
-        try:
-            req = urllib.request.Request(url, headers={
-                "Referer": "https://finance.sina.com.cn",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            })
-            with _opener.open(req, timeout=15) as r:
-                data = json.loads(r.read().decode("utf-8"))
-                if not isinstance(data, list):
-                    return []
-                return data
-        except Exception:
-            return []
+        self.max_workers = max_workers
 
     def _prepare_data(self, raw: List[Dict]) -> Optional[List[Dict]]:
         """清洗并预计算K线数据：MA、金叉、死叉、阴阳线"""
@@ -161,17 +322,13 @@ class StrictStockScreener:
 
     def _check_signal_at(self, data: List[Dict], idx: int) -> Tuple[bool, bool, Dict]:
         """
-        在指定位置idx检查是否有买入信号（完全对齐通达信严格选股.txt逻辑）
-
-        通达信指标是对每根K线独立计算，以下用Python对齐实现。
-
+        在指定位置idx检查是否有买入信号（完全对齐通达信金叉.txt逻辑）
         返回: (普通买入, 严格买入, 详情)
         """
         n = len(data)
         curr = data[idx]
 
         # ===== 基础判断 =====
-        # 当前必须是阳线
         if not curr['is_yang']:
             return False, False, {}
 
@@ -185,10 +342,9 @@ class StrictStockScreener:
         if gold_cross_idx == -1:
             return False, False, {}
 
-        dist_gold = idx - gold_cross_idx  # 距金叉天数
+        dist_gold = idx - gold_cross_idx
 
         # ===== 第二步：死叉检测 =====
-        # 金叉后不能出现死叉（找最近的死叉，其距离必须>距金叉天数）
         dead_cross_idx = -1
         for j in range(idx - 1, 29, -1):
             if data[j].get('dead_cross', False):
@@ -197,21 +353,17 @@ class StrictStockScreener:
 
         if dead_cross_idx != -1:
             dist_dead = idx - dead_cross_idx
-            # 金叉后无死叉：距金叉天数 < 距死叉天数
             if dist_gold >= dist_dead:
                 return False, False, {}
 
         # ===== 第三步：金叉后寻找最后一根阴线的成交量（回看20天）=====
-        # 对齐通达信逻辑：从远到近扫描，最近的阴线覆盖之前的
-        # 条件：N天前是阴线，且N < 距金叉天数（确保在本次金叉之后）
         yin_vol = 0
-        for offset in range(20, 0, -1):  # 从20到1
+        for offset in range(20, 0, -1):
             check_idx = idx - offset
             if check_idx < 0:
                 continue
             if offset < dist_gold and data[check_idx]['is_yin']:
                 yin_vol = data[check_idx]['volume']
-                # 不break，让更近的覆盖
 
         has_yin = yin_vol > 0
         if not has_yin:
@@ -220,7 +372,7 @@ class StrictStockScreener:
         # ===== 第四步：金叉日量能 =====
         gold_day_vol = data[gold_cross_idx]['volume']
 
-        # ===== 新增条件：金叉日量能要比前7日的阴线量能高 =====
+        # 金叉日量能要比前7日的阴线量能高
         max_yin_vol_before_gold = 0
         for offset in range(1, 8):
             check_idx = gold_cross_idx - offset
@@ -229,16 +381,7 @@ class StrictStockScreener:
 
         gold_vol_enough = gold_day_vol > max_yin_vol_before_gold
 
-        # ===== 第五步：检查当前位置之前是否存在倍量阳线 =====
-        # 倍量阳条件：距金叉天数>0 且 <=20，是阳线，量>=阴线量*2，量>金叉日量
-        # 然后找"首根倍量阳线"（金叉后第一根满足条件的）
-        #
-        # 通达信逻辑：
-        #   倍量阳:=距金叉天数>0 AND 距金叉天数<=20 AND 阳线 AND VOL>=阴线量*2 AND VOL>金叉日量 AND 有阴线;
-        #   首倍量:=倍量阳 AND (REF(倍量阳,1)=0 AND ... AND REF(倍量阳,10)=0);
-        #   距首倍:=BARSLAST(首倍量);
-
-        # 先标记区间内所有满足倍量阳条件的K线
+        # ===== 第五步：检查倍量阳线 =====
         double_vol_yang_flags = []
         for k in range(gold_cross_idx + 1, idx + 1):
             k_dist_gold = k - gold_cross_idx
@@ -264,35 +407,31 @@ class StrictStockScreener:
         if first_double_idx == -1:
             return False, False, {}
 
-        dist_first_double = idx - first_double_idx  # 距首倍
-        first_double_price = data[first_double_idx]['close']  # 首倍价
-        first_double_vol = data[first_double_idx]['volume']   # 首倍量能
+        dist_first_double = idx - first_double_idx
+        first_double_price = data[first_double_idx]['close']
+        first_double_vol = data[first_double_idx]['volume']
 
         # ===== 放量适度（2-6倍） =====
         vol_moderate = first_double_vol < yin_vol * 6
         vol_explode = first_double_vol >= yin_vol * 6
 
         # ===== 阴线缩量判断 =====
-        # 间隔天数 = 距金叉天数 - 距首倍
         gap_days = dist_gold - dist_first_double
 
-        # 普通阴线缩量：金叉到倍量阳之间最大阴线量 < 金叉日量*2
+        # 普通阴线缩量（包含金叉日本身，对齐通达信YXM范围）
         max_yin_vol_between = 0
-        for k in range(gold_cross_idx + 1, first_double_idx):
+        for k in range(gold_cross_idx, first_double_idx):
             if data[k]['is_yin']:
                 max_yin_vol_between = max(max_yin_vol_between, data[k]['volume'])
 
         normal_shrink = max_yin_vol_between > 0 and max_yin_vol_between < gold_day_vol * 2
 
-        # 严格缩量：金叉到确认阳线之间的所有阴线量都 < 金叉日量
-        # 第一部分：金叉到倍量阳之间的阴线
+        # 严格缩量（包含金叉日本身，对齐通达信YJ范围）
         strict_shrink = True
-        for k in range(gold_cross_idx + 1, first_double_idx):
+        for k in range(gold_cross_idx, first_double_idx):
             if data[k]['is_yin'] and data[k]['volume'] >= gold_day_vol:
                 strict_shrink = False
                 break
-
-        # 第二部分：倍量阳到确认阳之间的阴线
         if strict_shrink:
             for k in range(first_double_idx + 1, idx):
                 if data[k]['is_yin'] and data[k]['volume'] >= gold_day_vol:
@@ -300,19 +439,16 @@ class StrictStockScreener:
                     break
 
         # ===== 确认阳线判断 =====
-        # 条件1：距首倍 >= 1 且 <= 5
         if dist_first_double < 1 or dist_first_double > 5:
             return False, False, {}
-
-        # 条件2：距首倍 < 距金叉天数（首倍在本次金叉之后）
         if dist_first_double >= dist_gold:
             return False, False, {}
 
-        # 条件3：阳线 且 收盘价*10000 >= 首倍价*容差（按周期动态调整）
+        # 收盘价容差（按周期动态调整）
         if curr['close'] * 10000 < first_double_price * self.tolerance:
             return False, False, {}
 
-        # 条件4：确认量能达标 - 量能 > 金叉到确认阳线之间所有阳线量能（排除倍量阳）
+        # 确认量能达标
         max_yang_vol_except_double = 0
         for k in range(gold_cross_idx + 1, idx):
             if k == first_double_idx:
@@ -323,46 +459,33 @@ class StrictStockScreener:
         if curr['volume'] <= max_yang_vol_except_double:
             return False, False, {}
 
-        # ===== 首次确认（本次金叉后第一次满足确认阳线条件） =====
-        # COUNT(确认阳,距金叉天数+1)=1
-        # 检查在当前位置之前（金叉之后）是否已经有确认阳线出现过
+        # ===== 首次确认 =====
         confirm_count = 0
         for check_i in range(gold_cross_idx + 1, idx):
-            # 对这个位置也做一遍确认阳线判断（简化版：只检查核心条件）
             if not data[check_i]['is_yang']:
                 continue
-
-            # 该位置的距首倍
             check_dist = check_i - first_double_idx
             if check_dist < 1 or check_dist > 5:
                 continue
             if check_dist >= (check_i - gold_cross_idx):
                 continue
-
-            # 收盘价条件
             if data[check_i]['close'] * 10000 < first_double_price * self.tolerance:
                 continue
-
-            # 量能达标
             check_max_yang = 0
             for kk in range(gold_cross_idx + 1, check_i):
                 if kk == first_double_idx:
                     continue
                 if data[kk]['is_yang'] and data[kk]['volume'] > check_max_yang:
                     check_max_yang = data[kk]['volume']
-
             if data[check_i]['volume'] <= check_max_yang:
                 continue
-
             confirm_count += 1
 
-        # 加上当前这根
         confirm_count += 1
-
         if confirm_count != 1:
             return False, False, {}
 
-        # ===== 综合信号判断 =====
+        # ===== 综合信号 =====
         details = {
             'date': curr['date'],
             'close': curr['close'],
@@ -379,10 +502,7 @@ class StrictStockScreener:
             'gap_days': gap_days,
         }
 
-        # 普通买入: 阴线缩量 + 放量适度 + 金叉后无死叉
         normal_buy = normal_shrink and vol_moderate
-
-        # 严格买入: 严格缩量 + 放量适度 + 间隔>0 + 金叉量够大
         strict_buy = strict_shrink and vol_moderate and gap_days > 0 and gold_vol_enough
 
         details['signal_type'] = '严格' if strict_buy else ('普通' if normal_buy else '无')
@@ -390,12 +510,9 @@ class StrictStockScreener:
 
         return normal_buy, strict_buy, details
 
-    def check_buy_signals(self, code: str) -> Tuple[bool, bool, Dict]:
-        """
-        检查买入信号（选股模式：只检查最新K线）
-        返回: (普通买入信号, 严格买入信号, 详情)
-        """
-        raw = self.fetch_kline(code, days=1500)
+    def check_one_stock(self, code: str, source_idx: int = 0) -> Tuple[bool, bool, Dict]:
+        """检查单只股票的买入信号"""
+        raw = fetch_kline_with_fallback(code, self.period, source_idx)
         if not raw:
             return False, False, {}
 
@@ -403,7 +520,6 @@ class StrictStockScreener:
         if data is None:
             return False, False, {}
 
-        # 选股模式：只检查最新一根K线
         return self._check_signal_at(data, len(data) - 1)
 
     def load_stock_list(self) -> List[Tuple[str, str]]:
@@ -425,16 +541,10 @@ class StrictStockScreener:
                         code = match.group(1)
                         name = match.group(2).strip()
 
-                        # ===== 基本面过滤（对齐通达信） =====
-                        # 1. 只要60/00/30开头的股票
                         if not code.startswith(('60', '00', '30')):
                             continue
-
-                        # 2. 排除ST/*ST股票
                         if 'ST' in name or '*ST' in name:
                             continue
-
-                        # 3. 排除退市股票
                         if '退' in name:
                             continue
 
@@ -448,47 +558,73 @@ class StrictStockScreener:
         return stocks
 
     def screen_all_stocks(self, stock_list: List[Tuple[str, str]]):
-        """批量选股"""
+        """并行批量选股 - 多数据源分散请求"""
         total = len(stock_list)
+        is_minute = self.period in ('1min', '5min', '15min', '30min', '60min')
+        num_sources = len(_SOURCES_MINUTE) if is_minute else len(_SOURCES_DAILY)
+
         print(f"\n{'=' * 80}")
         print(f"  严格选股程序 - 周期: {self.period_name}")
         print(f"  待分析: {total} 只股票")
+        print(f"  并行线程: {self.max_workers}  数据源: {num_sources}个")
         print(f"{'=' * 80}\n")
 
         normal_results = []
         strict_results = []
         error_count = 0
+        completed = 0
         start_time = time.time()
+        results_lock = threading.Lock()
 
-        for i, (code, name) in enumerate(stock_list, 1):
-            # 进度显示
-            elapsed = time.time() - start_time
-            if i > 1:
-                eta = elapsed / (i - 1) * (total - i + 1)
-                eta_str = f"预计剩余 {int(eta)}s"
-            else:
-                eta_str = ""
-
-            print(f"\r[{i}/{total}] {code} {name:<10} {eta_str:<20}", end='', flush=True)
-
+        def process_stock(args):
+            idx, code, name = args
+            source_idx = idx % num_sources
             try:
-                normal_signal, strict_signal, details = self.check_buy_signals(code)
+                normal_signal, strict_signal, details = self.check_one_stock(code, source_idx)
+                return (code, name, normal_signal, strict_signal, details, None)
+            except Exception as e:
+                return (code, name, False, False, {}, str(e))
 
-                if strict_signal:
-                    print(f"\r[{i}/{total}] {code} {name:<10} >>> 严格买入信号! <<<")
-                    strict_results.append((code, name, details))
-                elif normal_signal:
-                    print(f"\r[{i}/{total}] {code} {name:<10} >>> 普通买入信号 <<<")
-                    normal_results.append((code, name, details))
-            except Exception:
-                error_count += 1
+        tasks = [(i, code, name) for i, (code, name) in enumerate(stock_list)]
 
-            # 请求间隔，避免被封
-            time.sleep(0.05)
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(process_stock, task): task for task in tasks}
+
+            for future in as_completed(futures):
+                code, name, normal_signal, strict_signal, details, err = future.result()
+
+                with results_lock:
+                    completed += 1
+                    if err:
+                        error_count += 1
+
+                    elapsed = time.time() - start_time
+                    if completed > 1:
+                        speed = completed / elapsed
+                        eta = (total - completed) / speed
+                        eta_str = f"预计剩余 {int(eta)}s ({speed:.1f}只/s)"
+                    else:
+                        eta_str = ""
+
+                    if strict_signal:
+                        strict_results.append((code, name, details))
+                        with _print_lock:
+                            print(f"\r[{completed}/{total}] {code} {name:<10} "
+                                  f">>> 严格买入信号! <<<  {eta_str}")
+                    elif normal_signal:
+                        normal_results.append((code, name, details))
+                        with _print_lock:
+                            print(f"\r[{completed}/{total}] {code} {name:<10} "
+                                  f">>> 普通买入信号 <<<  {eta_str}")
+                    else:
+                        with _print_lock:
+                            print(f"\r[{completed}/{total}] {code} {name:<10} "
+                                  f"{eta_str:<40}", end='', flush=True)
 
         elapsed_total = time.time() - start_time
+        speed = total / elapsed_total if elapsed_total > 0 else 0
         print(f"\r{'=' * 80}")
-        print(f"  选股完成！ 用时 {elapsed_total:.1f}s")
+        print(f"  选股完成！ 用时 {elapsed_total:.1f}s  速度 {speed:.1f}只/s")
         print(f"  严格买入: {len(strict_results)} 只")
         print(f"  普通买入: {len(normal_results)} 只")
         if error_count > 0:
@@ -524,14 +660,16 @@ def print_results(title: str, results: List[Tuple[str, str, Dict]], period_name:
     if not results:
         return
 
+    results_sorted = sorted(results, key=lambda x: x[0])
+
     print(f"\n{'=' * 80}")
-    print(f"  {title} ({period_name})  共 {len(results)} 只")
+    print(f"  {title} ({period_name})  共 {len(results_sorted)} 只")
     print(f"{'=' * 80}")
     print(f"  {'代码':<8} {'名称':<10} {'信号日期':<20} {'收盘价':>8} "
           f"{'MA20':>8} {'MA30':>8} {'金叉日期':<12} {'距金叉':>5} {'距倍量':>5}")
     print(f"  {'-' * 76}")
 
-    for code, name, d in results:
+    for code, name, d in results_sorted:
         ma20_str = f"{d['ma20']:.2f}" if d.get('ma20') else "N/A"
         ma30_str = f"{d['ma30']:.2f}" if d.get('ma30') else "N/A"
         vol_tag = " [爆量]" if d.get('vol_explode') else ""
@@ -554,7 +692,9 @@ def main():
     period, period_name, scale = StrictStockScreener.PERIOD_MAP[choice]
     print(f"\n已选择: {period_name}")
 
-    screener = StrictStockScreener(period=period, period_name=period_name)
+    max_workers = 8
+    screener = StrictStockScreener(period=period, period_name=period_name,
+                                   max_workers=max_workers)
     stock_list = screener.load_stock_list()
 
     if not stock_list:
@@ -563,16 +703,12 @@ def main():
 
     normal_results, strict_results = screener.screen_all_stocks(stock_list)
 
-    # 输出严格买入（优先级高）
     print_results("严格买入信号", strict_results, period_name)
-
-    # 输出普通买入
     print_results("普通买入信号", normal_results, period_name)
 
     if not normal_results and not strict_results:
         print("\n没有找到符合买入条件的股票")
 
-    # 汇总
     if normal_results or strict_results:
         print(f"\n{'=' * 80}")
         print(f"  汇总: 严格 {len(strict_results)} 只 + 普通 {len(normal_results)} 只 "
