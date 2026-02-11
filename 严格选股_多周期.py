@@ -49,6 +49,153 @@ _opener = urllib.request.build_opener(_proxy_handler)
 # 线程安全的打印锁
 _print_lock = threading.Lock()
 
+# ==================== 全局控制变量 ====================
+# 控制状态: 'running'(运行中), 'paused'(暂停), 'stopped'(已停止)
+_control_state = 'running'
+_control_lock = threading.Lock()
+_pause_event = threading.Event()  # set=运行中, clear=暂停
+_pause_event.set()
+_stop_event = threading.Event()   # set=已停止
+_pause_start_time = 0.0  # 暂停开始时间
+_total_paused_time = 0.0  # 累计暂停时长
+_pause_time_lock = threading.Lock()
+
+def set_control_state(state: str):
+    """设置控制状态"""
+    global _control_state, _pause_start_time, _total_paused_time
+    with _control_lock:
+        old_state = _control_state
+        _control_state = state
+        if state == 'paused':
+            _pause_event.clear()
+            with _pause_time_lock:
+                _pause_start_time = time.time()
+        elif state == 'running':
+            _pause_event.set()
+            if old_state == 'paused':
+                with _pause_time_lock:
+                    _total_paused_time += time.time() - _pause_start_time
+        elif state == 'stopped':
+            _stop_event.set()
+            _pause_event.set()  # 解除暂停等待，让线程能退出
+
+def get_control_state() -> str:
+    """获取当前控制状态"""
+    with _control_lock:
+        return _control_state
+
+def get_total_paused_time() -> float:
+    """获取累计暂停时长（秒）"""
+    with _pause_time_lock:
+        extra = 0.0
+        if get_control_state() == 'paused':
+            extra = time.time() - _pause_start_time
+        return _total_paused_time + extra
+
+def reset_control():
+    """重置控制状态（每次选股前调用）"""
+    global _control_state, _pause_start_time, _total_paused_time
+    with _control_lock:
+        _control_state = 'running'
+    _pause_event.set()
+    _stop_event.clear()
+    with _pause_time_lock:
+        _pause_start_time = 0.0
+        _total_paused_time = 0.0
+
+def check_control():
+    """检查控制状态，如果是暂停则等待，如果是停止则抛出StopIteration"""
+    if _stop_event.is_set():
+        raise StopIteration("用户停止")
+    # 如果暂停，阻塞等待直到恢复或停止
+    _pause_event.wait()
+    if _stop_event.is_set():
+        raise StopIteration("用户停止")
+
+# ==================== 键盘监听线程 ====================
+def keyboard_listener():
+    """键盘监听线程，监听空格键暂停/继续，Q键停止"""
+    try:
+        import msvcrt  # Windows only
+        while not _stop_event.is_set():
+            if msvcrt.kbhit():
+                key = msvcrt.getch()
+                if key == b' ':  # 空格键 - 暂停/继续
+                    state = get_control_state()
+                    if state == 'running':
+                        set_control_state('paused')
+                        with _print_lock:
+                            print("\n")
+                            print("  " + "=" * 50)
+                            print("  ⏸  已暂停")
+                            print("  按 [空格] 继续  |  按 [Q] 停止并输出结果")
+                            print("  " + "=" * 50)
+                    elif state == 'paused':
+                        set_control_state('running')
+                        with _print_lock:
+                            print("  ▶  继续执行...\n")
+                elif key in (b'q', b'Q'):  # Q键 - 停止
+                    set_control_state('stopped')
+                    with _print_lock:
+                        print("\n  ⏹  用户停止，正在输出已收集的结果...")
+                    break
+                elif key == b'\x1b':  # ESC键 - 也可以停止
+                    set_control_state('stopped')
+                    with _print_lock:
+                        print("\n  ⏹  用户停止，正在输出已收集的结果...")
+                    break
+            time.sleep(0.05)
+    except ImportError:
+        pass  # 非Windows平台，忽略
+    except Exception:
+        pass
+
+# ==================== 新浪限流测试 ====================
+def test_sina_rate_limit():
+    """测试新浪数据源限流情况"""
+    print("\n" + "=" * 60)
+    print("  新浪数据源限流测试")
+    print("=" * 60)
+    print("  测试方法：连续请求10次，观察响应情况")
+    print()
+
+    test_code = '000001'
+    period = '240min'
+    success_count = 0
+    throttle_count = 0
+    errors = []
+
+    for i in range(10):
+        try:
+            start = time.time()
+            data = SinaKline.fetch(test_code, period, 50)
+            elapsed = time.time() - start
+            if data and len(data) > 10:
+                success_count += 1
+                status = "✓ 成功"
+            else:
+                status = "✗ 空数据"
+            print(f"  请求 {i+1:2d}/10: {status} ({elapsed:.2f}s)")
+        except Exception as e:
+            err_str = str(e)
+            errors.append(err_str)
+            if '456' in err_str or '403' in err_str or '429' in err_str:
+                throttle_count += 1
+                status = "✗ 限流"
+            else:
+                status = f"✗ 错误"
+            print(f"  请求 {i+1:2d}/10: {status} - {err_str[:40]}")
+        time.sleep(0.1)  # 100ms间隔
+
+    print()
+    print(f"  成功: {success_count}/10")
+    print(f"  限流: {throttle_count}/10")
+    if errors:
+        print(f"  错误类型: {set(errors)}")
+    print("=" * 60)
+    print()
+    return success_count == 10
+
 
 # ==================== 多数据源K线获取 ====================
 
@@ -358,7 +505,7 @@ class StrictStockScreener:
         self.max_workers = max_workers
 
     def _prepare_data(self, raw: List[Dict]) -> Optional[List[Dict]]:
-        """清洗并预计算K线数据：MA、金叉、死叉、阴阳线"""
+        """清洗并预计算K线数据：MA、金叉、死叉、阴阳线、MA5止跌、底部企稳"""
         data = []
         for d in raw:
             try:
@@ -385,6 +532,7 @@ class StrictStockScreener:
         for i in range(n):
             data[i]['ma20'] = (sum(closes[i - 19:i + 1]) / 20) if i >= 19 else None
             data[i]['ma30'] = (sum(closes[i - 29:i + 1]) / 30) if i >= 29 else None
+            data[i]['ma5'] = (sum(closes[i - 4:i + 1]) / 5) if i >= 4 else None
 
         # 预计算阴阳线
         for i in range(n):
@@ -649,24 +797,42 @@ class StrictStockScreener:
         }
 
         normal_buy = normal_shrink and vol_moderate
-        strict_buy = strict_shrink and vol_moderate and gap_days > 0 and gold_vol_enough
 
+        # ===== MA5止跌：MA5 >= 20天前的MA5 =====
+        ma5_rising = False
+        if idx >= 24 and curr.get('ma5') is not None and data[idx - 20].get('ma5') is not None:
+            ma5_rising = curr['ma5'] >= data[idx - 20]['ma5']
+
+        # ===== 底部企稳：30日最低价 >= 120日最低价 =====
+        bottom_stable = False
+        if idx >= 119:
+            low_30 = min(data[k]['low'] for k in range(idx - 29, idx + 1))
+            low_120 = min(data[k]['low'] for k in range(idx - 119, idx + 1))
+            bottom_stable = low_30 >= low_120
+
+        strict_buy = (strict_shrink and vol_moderate and gap_days > 0
+                      and gold_vol_enough and ma5_rising and bottom_stable)
+
+        details['ma5_rising'] = ma5_rising
+        details['bottom_stable'] = bottom_stable
         details['signal_type'] = '严格' if strict_buy else ('普通' if normal_buy else '无')
         details['vol_explode'] = vol_explode
 
         return normal_buy, strict_buy, details
 
-    def check_one_stock(self, code: str, source_idx: int = 0) -> Tuple[bool, bool, Dict]:
-        """检查单只股票的买入信号"""
+    def check_one_stock(self, code: str, source_idx: int = 0) -> Tuple[bool, bool, Dict, str]:
+        """检查单只股票的买入信号，返回(普通买入, 严格买入, 详情, 最后一根K线时间)"""
         raw = fetch_kline_with_fallback(code, self.period, source_idx)
         if not raw:
-            return False, False, {}
+            return False, False, {}, None
 
         data = self._prepare_data(raw)
         if data is None:
-            return False, False, {}
+            return False, False, {}, None
 
-        return self._check_signal_at(data, len(data) - 1)
+        normal_buy, strict_buy, details = self._check_signal_at(data, len(data) - 1)
+        last_bar_time = data[-1]['date'] if data else None
+        return normal_buy, strict_buy, details, last_bar_time
 
     def load_stock_list(self) -> List[Tuple[str, str]]:
         """从MD文件加载股票列表（含基本面过滤）"""
@@ -761,31 +927,74 @@ class StrictStockScreener:
         completed = 0
         start_time = time.time()
         results_lock = threading.Lock()
+        reference_time = None  # 基准时间（第一只成功获取数据的股票的最后一根K线时间）
+        time_mismatch_count = 0  # 时间不一致计数
 
         def process_stock(args):
             idx, code, name = args
             source_idx = idx % num_sources
             try:
-                normal_signal, strict_signal, details = self.check_one_stock(code, source_idx)
-                return (code, name, normal_signal, strict_signal, details, None)
+                # 任务开始前检查控制状态（暂停时阻塞，停止时跳过）
+                check_control()
+                normal_signal, strict_signal, details, last_bar = self.check_one_stock(code, source_idx)
+                return (code, name, normal_signal, strict_signal, details, last_bar, None)
+            except StopIteration:
+                return (code, name, False, False, {}, None, '__stopped__')
             except Exception as e:
-                return (code, name, False, False, {}, str(e))
+                return (code, name, False, False, {}, None, str(e))
 
         tasks = [(i, code, name) for i, (code, name) in enumerate(stock_list)]
+
+        # 重置控制状态
+        reset_control()
+        stopped_early = False
+
+        # 启动键盘监听线程
+        keyboard_thread = threading.Thread(target=keyboard_listener, daemon=True)
+        keyboard_thread.start()
+
+        print(f"  提示: 按 [空格] 暂停/继续  |  按 [Q] 或 [ESC] 停止并输出结果\n")
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {executor.submit(process_stock, task): task for task in tasks}
 
             for future in as_completed(futures):
-                code, name, normal_signal, strict_signal, details, err = future.result()
+                # 检查控制状态
+                try:
+                    check_control()
+                except StopIteration:
+                    stopped_early = True
+                    # 取消尚未开始的任务
+                    for f in futures:
+                        f.cancel()
+                    break
+
+                code, name, normal_signal, strict_signal, details, last_bar, err = future.result()
+
+                # 跳过被停止的任务
+                if err == '__stopped__':
+                    continue
 
                 with results_lock:
                     completed += 1
                     if err:
                         error_count += 1
 
-                    elapsed = time.time() - start_time
-                    if completed > 1:
+                    # 设置基准时间（第一只成功获取数据的股票）
+                    if reference_time is None and last_bar is not None:
+                        reference_time = last_bar
+                        print(f"\n  基准时间: {reference_time}")
+
+                    # 检查信号时间是否与基准时间一致
+                    signal_time = details.get('date') if details else None
+                    time_mismatch = False
+                    if reference_time and signal_time and signal_time != reference_time:
+                        time_mismatch = True
+                        time_mismatch_count += 1
+
+                    # 计算速度时扣除暂停时间
+                    elapsed = time.time() - start_time - get_total_paused_time()
+                    if completed > 1 and elapsed > 0:
                         speed = completed / elapsed
                         eta = (total - completed) / speed
                         eta_str = f"预计剩余 {int(eta)}s ({speed:.1f}只/s)"
@@ -794,23 +1003,42 @@ class StrictStockScreener:
 
                     if strict_signal:
                         strict_results.append((code, name, details))
+                        mismatch_tag = " [日期为前一天]" if time_mismatch else ""
                         with _print_lock:
                             print(f"\r[{completed}/{total}] {code} {name:<10} "
-                                  f">>> 严格买入信号! <<<  {eta_str}")
+                                  f">>> 严格买入信号! <<< {mismatch_tag} {eta_str}")
                     elif normal_signal:
                         normal_results.append((code, name, details))
+                        mismatch_tag = " [日期为前一天]" if time_mismatch else ""
                         with _print_lock:
                             print(f"\r[{completed}/{total}] {code} {name:<10} "
-                                  f">>> 普通买入信号 <<<  {eta_str}")
+                                  f">>> 普通买入信号 <<< {mismatch_tag} {eta_str}")
                     else:
                         with _print_lock:
                             print(f"\r[{completed}/{total}] {code} {name:<10} "
                                   f"{eta_str:<40}", end='', flush=True)
 
         elapsed_total = time.time() - start_time
-        speed = total / elapsed_total if elapsed_total > 0 else 0
+        paused_total = get_total_paused_time()
+        active_time = elapsed_total - paused_total
+        speed = completed / active_time if active_time > 0 else 0
+
+        # 注：每只股票只检查其最后一根K线（data[-1]）
+        # 信号本身就是最后一根K线的信号，无需额外过滤
+
         print(f"\r{'=' * 80}")
-        print(f"  选股完成！ 用时 {elapsed_total:.1f}s  速度 {speed:.1f}只/s")
+        if stopped_early:
+            print(f"  选股被用户停止  已完成 {completed}/{total} 只")
+        else:
+            print(f"  选股完成！")
+        time_info = f"用时 {active_time:.1f}s  速度 {speed:.1f}只/s"
+        if paused_total > 1:
+            time_info += f"  (暂停 {paused_total:.1f}s)"
+        print(f"  {time_info}")
+        if reference_time:
+            print(f"  基准时间: {reference_time}")
+        if time_mismatch_count > 0:
+            print(f"  ⚠ 日期不一致: {time_mismatch_count} 只 (数据非最新)")
         print(f"  严格买入: {len(strict_results)} 只")
         print(f"  普通买入: {len(normal_results)} 只")
         if error_count > 0:
@@ -840,6 +1068,12 @@ def show_menu():
     print("  6. 日线")
     print("  7. 周线")
     print("  8. 月线")
+    print()
+    print("-" * 50)
+    print("  运行时控制：")
+    print("    空格  - 暂停 / 继续")
+    print("    Q     - 停止并输出已收集的结果")
+    print("    ESC   - 停止并输出已收集的结果")
     print()
     print("=" * 50)
 
