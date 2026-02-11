@@ -207,10 +207,10 @@ class THSKline(KlineSource):
 
 
 # 数据源列表
-# 分钟线：新浪、东方财富（腾讯/同花顺不支持分钟K线）
-# 日线/周线/月线：新浪、东方财富、腾讯、同花顺
-_SOURCES_MINUTE = [SinaKline, EastmoneyKline]
-_SOURCES_DAILY = [SinaKline, EastmoneyKline, TencentKline, THSKline]
+# 分钟线：仅新浪（东方财富频繁限流已去除，腾讯/同花顺不支持分钟K线）
+# 日线/周线/月线：新浪、同花顺（东方财富频繁限流已去除，腾讯DNS不通已去除）
+_SOURCES_MINUTE = [SinaKline]
+_SOURCES_DAILY = [SinaKline, THSKline]
 
 
 # 限流计数器（线程安全）
@@ -237,11 +237,65 @@ def reset_throttle_counts():
         _throttle_counts.clear()
 
 
+class SourceRateLimiter:
+    """每个数据源独立的速率限制器（令牌桶算法）"""
+
+    def __init__(self, max_per_sec: float = 3.0):
+        self._limiters = {}  # {源名: {'lock': Lock, 'last_time': float, 'interval': float, 'backoff': float}}
+        self._global_lock = threading.Lock()
+        self._interval = 1.0 / max_per_sec  # 每次请求的最小间隔
+
+    def _get_limiter(self, src_name: str) -> dict:
+        if src_name not in self._limiters:
+            with self._global_lock:
+                if src_name not in self._limiters:
+                    self._limiters[src_name] = {
+                        'lock': threading.Lock(),
+                        'last_time': 0.0,
+                        'backoff': 0.0,  # 被限流后的额外退避时间
+                    }
+        return self._limiters[src_name]
+
+    def wait(self, src_name: str):
+        """请求前调用，会阻塞直到满足速率限制"""
+        lim = self._get_limiter(src_name)
+        with lim['lock']:
+            now = time.time()
+            wait_interval = self._interval + lim['backoff']
+            elapsed = now - lim['last_time']
+            if elapsed < wait_interval:
+                time.sleep(wait_interval - elapsed)
+            lim['last_time'] = time.time()
+
+    def report_throttled(self, src_name: str):
+        """报告某数据源被限流，增加退避时间（最大8秒）"""
+        lim = self._get_limiter(src_name)
+        with lim['lock']:
+            if lim['backoff'] < 0.5:
+                lim['backoff'] = 2.0
+            else:
+                lim['backoff'] = min(lim['backoff'] * 2, 8.0)
+
+    def report_success(self, src_name: str):
+        """请求成功，逐步减少退避时间"""
+        lim = self._get_limiter(src_name)
+        with lim['lock']:
+            if lim['backoff'] > 0:
+                lim['backoff'] = max(lim['backoff'] * 0.5, 0.0)
+                if lim['backoff'] < 0.1:
+                    lim['backoff'] = 0.0
+
+
+# 全局速率限制器：每个数据源每秒最多2次请求（新浪单源需更保守）
+_rate_limiter = SourceRateLimiter(max_per_sec=2.0)
+
+
 def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
                               datalen: int = 1500) -> List[Dict]:
     """
     从指定数据源获取K线，失败自动切换下一个数据源。
     source_idx 用于在多线程中分散到不同数据源。
+    每个数据源请求前会受速率限制，被限流后自动指数退避。
     """
     is_minute = period in ('1min', '5min', '15min', '30min', '60min')
     sources = _SOURCES_MINUTE if is_minute else _SOURCES_DAILY
@@ -249,15 +303,19 @@ def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
     order = [sources[(source_idx + i) % len(sources)] for i in range(len(sources))]
 
     for src in order:
+        src_name = src.__name__
         try:
+            _rate_limiter.wait(src_name)  # 等待速率限制
             data = src.fetch(code, period, datalen)
             if data and len(data) > 30:
+                _rate_limiter.report_success(src_name)  # 成功，减少退避
                 return data
         except Exception as e:
             err_str = str(e)
             # 检测限流：HTTP 456(新浪)、连接断开(东财)、403等
             if '456' in err_str or 'RemoteDisconnected' in err_str or '403' in err_str or '429' in err_str:
-                _record_throttle(src.__name__)
+                _record_throttle(src_name)
+                _rate_limiter.report_throttled(src_name)  # 限流，增加退避
             continue
     return []
 
@@ -343,8 +401,9 @@ class StrictStockScreener:
                 data[i]['gold_cross'] = False
                 data[i]['dead_cross'] = False
             else:
-                data[i]['gold_cross'] = (prev['ma20'] < prev['ma30'] and curr['ma20'] > curr['ma30'])
-                data[i]['dead_cross'] = (prev['ma20'] > prev['ma30'] and curr['ma20'] < curr['ma30'])
+                # TDX CROSS(A,B) = prev_A <= prev_B AND curr_A > curr_B
+                data[i]['gold_cross'] = (prev['ma20'] <= prev['ma30'] and curr['ma20'] > curr['ma30'])
+                data[i]['dead_cross'] = (prev['ma20'] >= prev['ma30'] and curr['ma20'] < curr['ma30'])
 
         return data
 
@@ -361,8 +420,9 @@ class StrictStockScreener:
             return False, False, {}
 
         # ===== 第一步：找最近的金叉日 =====
+        # TDX BARSLAST(金叉日) 在金叉当天返回0，所以搜索范围包含idx自身
         gold_cross_idx = -1
-        for j in range(idx - 1, 29, -1):
+        for j in range(idx, 29, -1):
             if data[j].get('gold_cross', False):
                 gold_cross_idx = j
                 break
@@ -373,14 +433,16 @@ class StrictStockScreener:
         dist_gold = idx - gold_cross_idx
 
         # ===== 第二步：死叉检测 =====
+        # TDX BARSLAST(死叉日) 同理，搜索范围包含idx自身
         dead_cross_idx = -1
-        for j in range(idx - 1, 29, -1):
+        for j in range(idx, 29, -1):
             if data[j].get('dead_cross', False):
                 dead_cross_idx = j
                 break
 
         if dead_cross_idx != -1:
             dist_dead = idx - dead_cross_idx
+            # TDX: 金叉后无死叉:=距金叉天数<距死叉天数
             if dist_gold >= dist_dead:
                 return False, False, {}
 
@@ -415,30 +477,85 @@ class StrictStockScreener:
 
         gold_vol_enough = gold_day_vol > max_yin_vol_before_gold
 
-        # ===== 第五步：检查倍量阳线（每根K线独立计算阴线量，对齐通达信）=====
-        double_vol_yang_flags = []
-        for k in range(gold_cross_idx + 1, idx + 1):
-            k_dist_gold = k - gold_cross_idx
-            k_yin_vol = calc_yin_vol_at(k)
-            if (k_dist_gold > 0 and k_dist_gold <= 20 and
-                    data[k]['is_yang'] and
-                    k_yin_vol > 0 and
-                    data[k]['volume'] >= k_yin_vol * 2 and
-                    data[k]['volume'] > gold_day_vol):
-                double_vol_yang_flags.append(k)
+        # ===== 辅助函数：在任意位置pos计算倍量阳标记列表和首倍量位置 =====
+        def find_first_double_at(pos):
+            """
+            在pos位置计算：倍量阳标记 → 首倍量位置
+            完全对齐TDX逐K线独立计算逻辑
+            返回: first_double_idx 或 -1
+            """
+            pos_dist_gold = pos - gold_cross_idx
+            dv_flags = []
+            for k in range(gold_cross_idx + 1, pos + 1):
+                kd = k - gold_cross_idx
+                kv = calc_yin_vol_at(k)
+                if (kd > 0 and kd <= 20 and
+                        data[k]['is_yang'] and
+                        kv > 0 and
+                        data[k]['volume'] >= kv * 2 and
+                        data[k]['volume'] > gold_day_vol):
+                    dv_flags.append(k)
 
-        # 找首根倍量阳线（前10根K线都不是倍量阳的那根）
-        first_double_idx = -1
-        for k in double_vol_yang_flags:
-            is_first = True
-            for prev_k in range(max(k - 10, gold_cross_idx + 1), k):
-                if prev_k in double_vol_yang_flags:
-                    is_first = False
-                    break
-            if is_first:
-                first_double_idx = k
-                break
+            # TDX 首倍量: 倍量阳 AND 前10根都不是倍量阳
+            # BARSLAST(首倍量) 取最近的首倍量
+            fd_idx = -1
+            for k in dv_flags:
+                is_first = True
+                for prev_k in range(max(k - 10, gold_cross_idx + 1), k):
+                    if prev_k in dv_flags:
+                        is_first = False
+                        break
+                if is_first:
+                    fd_idx = k  # 不break，让更近的覆盖（对齐BARSLAST）
+            return fd_idx
 
+        # ===== 辅助函数：在任意位置pos判断是否为确认阳 =====
+        def is_confirm_yang_at(pos):
+            """
+            在pos位置独立计算确认阳条件（对齐TDX逐K线独立计算）
+            返回: True/False
+            """
+            if not data[pos]['is_yang']:
+                return False
+
+            fd_idx = find_first_double_at(pos)
+            if fd_idx == -1:
+                return False
+
+            pos_dist_fd = pos - fd_idx
+            pos_dist_gold = pos - gold_cross_idx
+            fd_price = data[fd_idx]['close']
+
+            # 距首倍>=1 AND 距首倍<=5 AND 距首倍<距金叉天数
+            if pos_dist_fd < 1 or pos_dist_fd > 5:
+                return False
+            if pos_dist_fd >= pos_dist_gold:
+                return False
+
+            # 收盘价容差
+            if data[pos]['close'] * 10000 < fd_price * self.tolerance:
+                return False
+
+            # 确认量能达标（QRY: N<距金叉天数 AND N<>距首倍）
+            max_yang_vol = 0
+            for n in range(1, 21):
+                kk = pos - n
+                if kk < 0:
+                    continue
+                if pos_dist_gold <= n:  # N < 距金叉天数
+                    continue
+                if kk == fd_idx:  # N <> 距首倍
+                    continue
+                if data[kk]['is_yang']:
+                    max_yang_vol = max(max_yang_vol, data[kk]['volume'])
+
+            if data[pos]['volume'] <= max_yang_vol:
+                return False
+
+            return True
+
+        # ===== 在当前位置idx计算首倍量 =====
+        first_double_idx = find_first_double_at(idx)
         if first_double_idx == -1:
             return False, False, {}
 
@@ -447,76 +564,70 @@ class StrictStockScreener:
         first_double_vol = data[first_double_idx]['volume']
 
         # ===== 放量适度（2-6倍） =====
+        # TDX: 首倍量能 < 阴线量*6，这里阴线量是当前K线(idx)的阴线量
         vol_moderate = first_double_vol < yin_vol * 6
         vol_explode = first_double_vol >= yin_vol * 6
 
         # ===== 阴线缩量判断 =====
         gap_days = dist_gold - dist_first_double
 
-        # 普通阴线缩量（包含金叉日本身，对齐通达信YXM范围）
+        # 普通阴线缩量（对齐通达信YXM：从首倍量位置往金叉方向看，最多20根）
         max_yin_vol_between = 0
-        for k in range(gold_cross_idx, first_double_idx):
+        for n in range(1, 21):
+            k = first_double_idx - n
+            if k < 0:
+                continue
+            if n == 1:
+                if not (1 <= gap_days):  # YXM1用<=
+                    continue
+            else:
+                if not (n < gap_days):  # YXM2~20用<
+                    continue
             if data[k]['is_yin']:
                 max_yin_vol_between = max(max_yin_vol_between, data[k]['volume'])
 
         normal_shrink = max_yin_vol_between > 0 and max_yin_vol_between < gold_day_vol * 2
 
-        # 严格缩量（包含金叉日本身，对齐通达信YJ范围）
+        # 严格缩量（对齐通达信YJ范围）
         strict_shrink = True
-        for k in range(gold_cross_idx, first_double_idx):
+        # 第一部分：YJ1~YJ20
+        for n in range(1, 21):
+            k = first_double_idx - n
+            if k < 0:
+                continue
+            if n == 1:
+                if not (1 <= gap_days):
+                    continue
+            else:
+                if not (n < gap_days):
+                    continue
             if data[k]['is_yin'] and data[k]['volume'] >= gold_day_vol:
                 strict_shrink = False
                 break
+        # 第二部分：YZ1~YZ5
         if strict_shrink:
-            for k in range(first_double_idx + 1, idx):
+            for n in range(1, 6):
+                k = idx - n
+                if k < 0:
+                    continue
+                if not (n < dist_first_double):  # N<距首倍
+                    continue
                 if data[k]['is_yin'] and data[k]['volume'] >= gold_day_vol:
                     strict_shrink = False
                     break
 
-        # ===== 确认阳线判断 =====
-        if dist_first_double < 1 or dist_first_double > 5:
-            return False, False, {}
-        if dist_first_double >= dist_gold:
+        # ===== 确认阳线判断（当前K线idx）=====
+        if not is_confirm_yang_at(idx):
             return False, False, {}
 
-        # 收盘价容差（按周期动态调整）
-        if curr['close'] * 10000 < first_double_price * self.tolerance:
-            return False, False, {}
-
-        # 确认量能达标
-        max_yang_vol_except_double = 0
-        for k in range(gold_cross_idx + 1, idx):
-            if k == first_double_idx:
-                continue
-            if data[k]['is_yang'] and data[k]['volume'] > max_yang_vol_except_double:
-                max_yang_vol_except_double = data[k]['volume']
-
-        if curr['volume'] <= max_yang_vol_except_double:
-            return False, False, {}
-
-        # ===== 首次确认 =====
+        # ===== 首次确认（对齐通达信 COUNT(确认阳, 距金叉天数+1)=1）=====
+        # TDX中每根K线的确认阳都是独立计算的（阴线量、倍量阳、首倍量、首倍价、QRY都重算）
         confirm_count = 0
         for check_i in range(gold_cross_idx + 1, idx):
-            if not data[check_i]['is_yang']:
-                continue
-            check_dist = check_i - first_double_idx
-            if check_dist < 1 or check_dist > 5:
-                continue
-            if check_dist >= (check_i - gold_cross_idx):
-                continue
-            if data[check_i]['close'] * 10000 < first_double_price * self.tolerance:
-                continue
-            check_max_yang = 0
-            for kk in range(gold_cross_idx + 1, check_i):
-                if kk == first_double_idx:
-                    continue
-                if data[kk]['is_yang'] and data[kk]['volume'] > check_max_yang:
-                    check_max_yang = data[kk]['volume']
-            if data[check_i]['volume'] <= check_max_yang:
-                continue
-            confirm_count += 1
+            if is_confirm_yang_at(check_i):
+                confirm_count += 1
 
-        confirm_count += 1
+        confirm_count += 1  # 加上当前K线(idx)自身
         if confirm_count != 1:
             return False, False, {}
 
@@ -628,6 +739,7 @@ class StrictStockScreener:
         print(f"  严格选股程序 - 周期: {self.period_name}")
         print(f"  待分析: {total} 只股票")
         print(f"  并行线程: {self.max_workers}  数据源: {num_sources}个")
+        print(f"  速率限制: 每数据源 ≤3次/秒，限流自动退避(2-8s)")
 
         # 测试数据源可用性
         ok_list, fail_list = self._check_sources()
@@ -703,6 +815,9 @@ class StrictStockScreener:
         print(f"  普通买入: {len(normal_results)} 只")
         if error_count > 0:
             print(f"  请求失败: {error_count} 只")
+        throttle_info = get_throttle_summary()
+        if throttle_info:
+            print(f"  {throttle_info}")
         print(f"{'=' * 80}\n")
 
         return normal_results, strict_results
@@ -766,7 +881,9 @@ def main():
     period, period_name, scale = StrictStockScreener.PERIOD_MAP[choice]
     print(f"\n已选择: {period_name}")
 
-    max_workers = 8
+    # 分钟线只有新浪一个源，降低并发避免限流；日线有两个源可以稍高
+    is_minute = period in ('1min', '5min', '15min', '30min', '60min')
+    max_workers = 4 if is_minute else 6
     screener = StrictStockScreener(period=period, period_name=period_name,
                                    max_workers=max_workers)
     stock_list = screener.load_stock_list()
