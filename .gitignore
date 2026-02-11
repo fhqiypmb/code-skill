@@ -1,2 +1,4 @@
 # DeepVCode clipboard
 .deepvcode/clipboard/
+__pycache__/  
+.deepvcode/  
