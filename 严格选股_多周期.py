@@ -314,50 +314,11 @@ class TencentKline(KlineSource):
         return result
 
 
-class THSKline(KlineSource):
-    """同花顺K线（仅日线/周线/月线）"""
-
-    PERIOD_CODE_MAP = {
-        '240min': '01',  # 日线
-        'weekly': '11',  # 周线
-        'monthly': '21', # 月线
-    }
-
-    @classmethod
-    def fetch(cls, code: str, period: str, datalen: int = 1500) -> List[Dict]:
-        pc = cls.PERIOD_CODE_MAP.get(period)
-        if not pc:
-            return []  # 同花顺不支持分钟K线
-        url = f"https://d.10jqka.com.cn/v6/line/hs_{code}/{pc}/last.js"
-        raw = cls._request(url, {
-            "Referer": "https://stockpage.10jqka.com.cn/",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        })
-        text = raw.decode("utf-8")
-        # 解析JSONP
-        m = re.search(r'\((\{.*\})\)', text, re.DOTALL)
-        if not m:
-            return []
-        resp = json.loads(m.group(1))
-        raw_data = resp.get('data', '')
-        if not raw_data:
-            return []
-        result = []
-        for rec in raw_data.split(';'):
-            parts = rec.split(',')
-            if len(parts) >= 7 and parts[1]:
-                result.append({
-                    "day": parts[0], "open": parts[1], "high": parts[2],
-                    "low": parts[3], "close": parts[4], "volume": parts[5],
-                })
-        return result
-
-
 # 数据源列表
-# 分钟线：仅新浪（东方财富频繁限流已去除，腾讯/同花顺不支持分钟K线）
-# 日线/周线/月线：新浪、同花顺（东方财富频繁限流已去除，腾讯DNS不通已去除）
+# 分钟线：仅新浪（东方财富频繁限流已去除，腾讯不支持分钟K线）
+# 日线/周线/月线：仅新浪（同花顺日期格式不一致且无法获取当天数据已去除，东方财富频繁限流已去除，腾讯DNS不通已去除）
 _SOURCES_MINUTE = [SinaKline]
-_SOURCES_DAILY = [SinaKline, THSKline]
+_SOURCES_DAILY = [SinaKline]
 
 
 # 限流计数器（线程安全）
@@ -434,7 +395,7 @@ class SourceRateLimiter:
 
 
 # 全局速率限制器：每个数据源每秒最多2次请求（新浪单源需更保守）
-_rate_limiter = SourceRateLimiter(max_per_sec=2.0)
+_rate_limiter = SourceRateLimiter(max_per_sec=20.0)
 
 
 def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
@@ -509,8 +470,10 @@ class StrictStockScreener:
         data = []
         for d in raw:
             try:
+                # 兼容不同数据源的时间字段
+                date_val = d.get("day") or d.get("date")
                 data.append({
-                    "date": d["day"],
+                    "date": date_val,
                     "open": float(d["open"]),
                     "high": float(d["high"]),
                     "low": float(d["low"]),
@@ -530,16 +493,20 @@ class StrictStockScreener:
         # 预计算MA
         closes = [d['close'] for d in data]
         for i in range(n):
+            # 通达信 MA(C, N) 在计算时会保留更高精度
             data[i]['ma20'] = (sum(closes[i - 19:i + 1]) / 20) if i >= 19 else None
             data[i]['ma30'] = (sum(closes[i - 29:i + 1]) / 30) if i >= 29 else None
             data[i]['ma5'] = (sum(closes[i - 4:i + 1]) / 5) if i >= 4 else None
 
         # 预计算阴阳线
         for i in range(n):
+            # 通达信 CLOSE > OPEN 是阳线，CLOSE < OPEN 是阴线
             data[i]['is_yang'] = data[i]['close'] > data[i]['open']
             data[i]['is_yin'] = data[i]['close'] < data[i]['open']
 
         # 预计算金叉死叉
+        # 定义一个极小值用于浮点数比较，模拟通达信的数值特性
+        EPS = 1e-8
         data[0]['gold_cross'] = False
         data[0]['dead_cross'] = False
         for i in range(1, n):
@@ -550,8 +517,14 @@ class StrictStockScreener:
                 data[i]['dead_cross'] = False
             else:
                 # TDX CROSS(A,B) = prev_A <= prev_B AND curr_A > curr_B
-                data[i]['gold_cross'] = (prev['ma20'] <= prev['ma30'] and curr['ma20'] > curr['ma30'])
-                data[i]['dead_cross'] = (prev['ma20'] >= prev['ma30'] and curr['ma20'] < curr['ma30'])
+                # 修复判定逻辑：由于浮点数精度，A <= B 应当包含 A 非常接近 B 的情况
+                p_ma20, p_ma30 = prev['ma20'], prev['ma30']
+                c_ma20, c_ma30 = curr['ma20'], curr['ma30']
+
+                # 金叉：前一根 ma20 <= ma30，当前 ma20 > ma30
+                data[i]['gold_cross'] = (p_ma20 <= p_ma30 + EPS) and (c_ma20 > c_ma30 + EPS)
+                # 死叉：前一根 ma20 >= ma30，当前 ma20 < ma30
+                data[i]['dead_cross'] = (p_ma20 >= p_ma30 - EPS) and (c_ma20 < c_ma30 - EPS)
 
         return data
 
@@ -570,7 +543,7 @@ class StrictStockScreener:
         # ===== 第一步：找最近的金叉日 =====
         # TDX BARSLAST(金叉日) 在金叉当天返回0，所以搜索范围包含idx自身
         gold_cross_idx = -1
-        for j in range(idx, 29, -1):
+        for j in range(idx, self.ma_long, -1):
             if data[j].get('gold_cross', False):
                 gold_cross_idx = j
                 break
@@ -578,12 +551,25 @@ class StrictStockScreener:
         if gold_cross_idx == -1:
             return False, False, {}
 
+        # 检查金叉日是否符合“金叉量够大”条件
+        gold_day_vol = data[gold_cross_idx]['volume']
+        max_yin_vol_before_gold = 0
+        for offset in range(1, 8):
+            check_idx = gold_cross_idx - offset
+            if check_idx >= 0 and data[check_idx]['is_yin']:
+                max_yin_vol_before_gold = max(max_yin_vol_before_gold, data[check_idx]['volume'])
+
+        gold_vol_enough = gold_day_vol > max_yin_vol_before_gold
+
+        # 如果金叉量不够大，且当前正在检查“严格买入”路径（或者该条件是强制的），则提前退出
+        # 注意：通达信公式中 严格买入 包含 金叉量够大，普通买入（买入）不包含。
+
         dist_gold = idx - gold_cross_idx
 
         # ===== 第二步：死叉检测 =====
         # TDX BARSLAST(死叉日) 同理，搜索范围包含idx自身
         dead_cross_idx = -1
-        for j in range(idx, 29, -1):
+        for j in range(idx, self.ma_long, -1):
             if data[j].get('dead_cross', False):
                 dead_cross_idx = j
                 break
@@ -597,15 +583,25 @@ class StrictStockScreener:
         # ===== 第三步：计算阴线量的辅助函数（对齐通达信逐K线独立计算）=====
         def calc_yin_vol_at(pos):
             """在pos位置独立计算阴线量：从pos往前回看20根，找金叉后最近的阴线"""
-            dist = pos - gold_cross_idx
-            yv = 0
-            for off in range(20, 0, -1):
+            # 重新定位 pos 位置对应的金叉日
+            k_gold_idx = -1
+            for kj in range(pos, self.ma_long, -1):
+                if data[kj].get('gold_cross', False):
+                    k_gold_idx = kj
+                    break
+
+            if k_gold_idx == -1: return 0
+
+            k_dist_gold = pos - k_gold_idx
+            # TDX: 阴线量:=IF(YX1,REF(VOL,1),YXL2); 这是一个嵌套结构，越近的优先级越高
+            for off in range(1, 21):
                 ci = pos - off
                 if ci < 0:
                     continue
-                if off < dist and data[ci]['is_yin']:
-                    yv = data[ci]['volume']
-            return yv
+                # 只有在金叉日之后的阴线才算 (dist > off)
+                if off < k_dist_gold and data[ci]['is_yin']:
+                    return data[ci]['volume']
+            return 0
 
         # 当前K线的阴线量
         yin_vol = calc_yin_vol_at(idx)
@@ -614,16 +610,7 @@ class StrictStockScreener:
             return False, False, {}
 
         # ===== 第四步：金叉日量能 =====
-        gold_day_vol = data[gold_cross_idx]['volume']
-
-        # 金叉日量能要比前7日的阴线量能高
-        max_yin_vol_before_gold = 0
-        for offset in range(1, 8):
-            check_idx = gold_cross_idx - offset
-            if check_idx >= 0 and data[check_idx]['is_yin']:
-                max_yin_vol_before_gold = max(max_yin_vol_before_gold, data[check_idx]['volume'])
-
-        gold_vol_enough = gold_day_vol > max_yin_vol_before_gold
+        # (已在第一步计算完毕)
 
         # ===== 辅助函数：在任意位置pos计算倍量阳标记列表和首倍量位置 =====
         def find_first_double_at(pos):
@@ -632,29 +619,45 @@ class StrictStockScreener:
             完全对齐TDX逐K线独立计算逻辑
             返回: first_double_idx 或 -1
             """
-            pos_dist_gold = pos - gold_cross_idx
-            dv_flags = []
-            for k in range(gold_cross_idx + 1, pos + 1):
-                kd = k - gold_cross_idx
-                kv = calc_yin_vol_at(k)
-                if (kd > 0 and kd <= 20 and
-                        data[k]['is_yang'] and
-                        kv > 0 and
-                        data[k]['volume'] >= kv * 2 and
-                        data[k]['volume'] > gold_day_vol):
-                    dv_flags.append(k)
+            # 计算 pos 位置及其之前的所有倍量阳标记
+            dv_flags = {}
+            # 扫描范围：需要包含 pos 往前 10 根（用于首倍判定）
+            start_scan = max(0, pos - 30)
+            for k in range(start_scan, pos + 1):
+                # 1. 找 k 点对应的金叉日
+                k_gold_idx = -1
+                for kj in range(k, self.ma_long, -1):
+                    if data[kj].get('gold_cross', False):
+                        k_gold_idx = kj
+                        break
+                if k_gold_idx == -1: continue
 
-            # TDX 首倍量: 倍量阳 AND 前10根都不是倍量阳
-            # BARSLAST(首倍量) 取最近的首倍量
+                k_dist_gold = k - k_gold_idx
+                if k_dist_gold <= 0 or k_dist_gold > 20: continue
+
+                k_gold_vol = data[k_gold_idx]['volume']
+
+                # 2. 计算 k 点对应的阴线量
+                k_yin_vol = calc_yin_vol_at(k)
+
+                if (data[k]['is_yang'] and k_yin_vol > 0 and
+                    data[k]['volume'] >= k_yin_vol * 2 and
+                    data[k]['volume'] > k_gold_vol):
+                    dv_flags[k] = True
+
+            # TDX 首倍量: 倍量阳 AND (REF(倍量阳,1)=0 AND ... AND REF(倍量阳,10)=0)
             fd_idx = -1
-            for k in dv_flags:
+            # 在当前位置 idx 对应的金叉周期内找首倍量
+            for k in sorted(dv_flags.keys()):
+                if k <= gold_cross_idx: continue
+
                 is_first = True
-                for prev_k in range(max(k - 10, gold_cross_idx + 1), k):
-                    if prev_k in dv_flags:
+                for prev_off in range(1, 11):
+                    if (k - prev_off) in dv_flags:
                         is_first = False
                         break
                 if is_first:
-                    fd_idx = k  # 不break，让更近的覆盖（对齐BARSLAST）
+                    fd_idx = k
             return fd_idx
 
         # ===== 辅助函数：在任意位置pos判断是否为确认阳 =====
@@ -690,17 +693,12 @@ class StrictStockScreener:
                 kk = pos - n
                 if kk < 0:
                     continue
-                if pos_dist_gold <= n:  # N < 距金叉天数
-                    continue
-                if kk == fd_idx:  # N <> 距首倍
-                    continue
-                if data[kk]['is_yang']:
-                    max_yang_vol = max(max_yang_vol, data[kk]['volume'])
+                # QRYn: n < 距金叉天数 AND n <> 距首倍
+                if n < pos_dist_gold and n != pos_dist_fd:
+                    if data[kk]['is_yang']:
+                        max_yang_vol = max(max_yang_vol, data[kk]['volume'])
 
-            if data[pos]['volume'] <= max_yang_vol:
-                return False
-
-            return True
+            return data[pos]['volume'] > max_yang_vol
 
         # ===== 在当前位置idx计算首倍量 =====
         first_double_idx = find_first_double_at(idx)
@@ -771,11 +769,10 @@ class StrictStockScreener:
         # ===== 首次确认（对齐通达信 COUNT(确认阳, 距金叉天数+1)=1）=====
         # TDX中每根K线的确认阳都是独立计算的（阴线量、倍量阳、首倍量、首倍价、QRY都重算）
         confirm_count = 0
-        for check_i in range(gold_cross_idx + 1, idx):
+        for check_i in range(gold_cross_idx, idx + 1): # 范围应该是 [金叉日, 当前日]，即 距金叉天数+1 个周期
             if is_confirm_yang_at(check_i):
                 confirm_count += 1
 
-        confirm_count += 1  # 加上当前K线(idx)自身
         if confirm_count != 1:
             return False, False, {}
 
@@ -947,8 +944,7 @@ class StrictStockScreener:
         completed = 0
         start_time = time.time()
         results_lock = threading.Lock()
-        reference_time = None  # 基准时间（第一只成功获取数据的股票的最后一根K线时间）
-        time_mismatch_count = 0  # 时间不一致计数
+
 
         def process_stock(args):
             idx, code, name = args
@@ -1000,18 +996,6 @@ class StrictStockScreener:
                     if err:
                         error_count += 1
 
-                    # 设置基准时间（第一只成功获取数据的股票）
-                    if reference_time is None and last_bar is not None:
-                        reference_time = last_bar
-                        print(f"\n  基准时间: {reference_time}")
-
-                    # 检查信号时间是否与基准时间一致
-                    signal_time = details.get('date') if details else None
-                    time_mismatch = False
-                    if reference_time and signal_time and signal_time != reference_time:
-                        time_mismatch = True
-                        time_mismatch_count += 1
-
                     # 计算速度时扣除暂停时间
                     elapsed = time.time() - start_time - get_total_paused_time()
                     if completed > 1 and elapsed > 0:
@@ -1023,16 +1007,14 @@ class StrictStockScreener:
 
                     if strict_signal:
                         strict_results.append((code, name, details))
-                        mismatch_tag = " [日期为前一天]" if time_mismatch else ""
                         with _print_lock:
                             print(f"\r[{completed}/{total}] {code} {name:<10} "
-                                  f">>> 严格买入信号! <<< {mismatch_tag} {eta_str}")
+                                  f">>> 严格买入信号! <<< {eta_str}")
                     elif normal_signal:
                         normal_results.append((code, name, details))
-                        mismatch_tag = " [日期为前一天]" if time_mismatch else ""
                         with _print_lock:
                             print(f"\r[{completed}/{total}] {code} {name:<10} "
-                                  f">>> 普通买入信号 <<< {mismatch_tag} {eta_str}")
+                                  f">>> 普通买入信号 <<< {eta_str}")
                     else:
                         with _print_lock:
                             print(f"\r[{completed}/{total}] {code} {name:<10} "
@@ -1055,10 +1037,6 @@ class StrictStockScreener:
         if paused_total > 1:
             time_info += f"  (暂停 {paused_total:.1f}s)"
         print(f"  {time_info}")
-        if reference_time:
-            print(f"  基准时间: {reference_time}")
-        if time_mismatch_count > 0:
-            print(f"  ⚠ 日期不一致: {time_mismatch_count} 只 (数据非最新)")
         print(f"  严格买入: {len(strict_results)} 只")
         print(f"  普通买入: {len(normal_results)} 只")
         if error_count > 0:
@@ -1071,14 +1049,27 @@ class StrictStockScreener:
         return normal_results, strict_results
 
 
-def show_menu():
-    """显示周期选择菜单"""
+def show_mode_menu():
+    """显示模式选择菜单"""
     print()
     print("=" * 50)
     print("      严格选股程序 - MA金叉倍量阳线确认信号")
     print("=" * 50)
     print()
+    print("  请选择运行模式：")
+    print()
+    print("  1. 单独测试（测试单只股票）")
+    print("  2. 股票筛选（批量筛选所有股票）")
+    print()
+    print("=" * 50)
+
+
+def show_period_menu():
+    """显示周期选择菜单"""
+    print()
+    print("=" * 50)
     print("  请选择K线周期：")
+    print("=" * 50)
     print()
     print("  1. 1分钟线")
     print("  2. 5分钟线")
@@ -1090,7 +1081,7 @@ def show_menu():
     print("  8. 月线")
     print()
     print("-" * 50)
-    print("  运行时控制：")
+    print("  运行时控制（仅批量筛选）：")
     print("    空格  - 暂停 / 继续")
     print("    Q     - 停止并输出已收集的结果")
     print("    ESC   - 停止并输出已收集的结果")
@@ -1123,8 +1114,100 @@ def print_results(title: str, results: List[Tuple[str, str, Dict]], period_name:
     print(f"  {'-' * 76}")
 
 
+def _lookup_stock_name(code: str) -> str:
+    """从stock_list.md查找股票名称"""
+    md_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock_list.md')
+    if os.path.exists(md_file):
+        try:
+            pattern = r'\|\s*' + code + r'\s*\|\s*([^|]+)\s*\|'
+            with open(md_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    m = re.match(pattern, line)
+                    if m:
+                        return m.group(1).strip()
+        except Exception:
+            pass
+    return code
+
+
+def test_single_stock(period: str, period_name: str):
+    """单独测试一只股票，显示详细分析 + 筛选摘要表格"""
+    while True:
+        code = input("\n请输入股票代码（6位数字，如 000001）: ").strip()
+        if len(code) == 6 and code.isdigit():
+            break
+        print("无效的股票代码，请输入6位数字！")
+
+    stock_name = _lookup_stock_name(code)
+    print(f"\n  正在分析 {code} {stock_name} ({period_name})...")
+
+    screener = StrictStockScreener(period=period, period_name=period_name)
+    normal_signal, strict_signal, details, last_bar = screener.check_one_stock(code)
+
+    if not last_bar:
+        print(f"\n  ⚠ 无法获取K线数据，请检查股票代码是否正确")
+        return
+
+    # ---- 详细信号分析 ----
+    print(f"\n{'=' * 60}")
+    print(f"  股票: {code} {stock_name}")
+    print(f"  周期: {period_name}")
+    print(f"  最新K线时间: {last_bar}")
+    print(f"  {'-' * 56}")
+
+    if strict_signal:
+        print(f"  >>> 严格买入信号! <<<")
+    elif normal_signal:
+        print(f"  >>> 普通买入信号 <<<")
+    else:
+        print(f"  无买入信号")
+
+    if details:
+        print(f"  {'-' * 56}")
+        print(f"  信号日期:   {details.get('date', 'N/A')}")
+        print(f"  收盘价:     {details.get('close', 'N/A')}")
+        ma20 = details.get('ma20')
+        ma30 = details.get('ma30')
+        print(f"  MA20:       {f'{ma20:.2f}' if ma20 else 'N/A'}")
+        print(f"  MA30:       {f'{ma30:.2f}' if ma30 else 'N/A'}")
+        print(f"  金叉日期:   {details.get('gold_cross_date', 'N/A')}")
+        print(f"  距金叉:     {details.get('days_since_gold', 'N/A')} 根K线")
+        print(f"  距倍量:     {details.get('days_since_first_double', 'N/A')} 根K线")
+        print(f"  倍量阳收盘: {details.get('first_double_price', 'N/A')}")
+        print(f"  倍量阳成交: {details.get('first_double_vol', 'N/A')}")
+        print(f"  金叉日成交: {details.get('gold_day_vol', 'N/A')}")
+        print(f"  阴线量:     {details.get('yin_vol', 'N/A')}")
+        print(f"  间隔天数:   {details.get('gap_days', 'N/A')}")
+        print(f"  MA5止跌:    {'是' if details.get('ma5_rising') else '否'}")
+        print(f"  底部企稳:   {'是' if details.get('bottom_stable') else '否'}")
+        print(f"  信号类型:   {details.get('signal_type', 'N/A')}")
+        if details.get('vol_explode'):
+            print(f"  ⚠ 爆量（量能超过阴线量6倍）")
+
+    print(f"{'=' * 60}")
+
+    # ---- 筛选摘要表格（与批量筛选格式一致）----
+    normal_results = []
+    strict_results = []
+    if strict_signal:
+        strict_results.append((code, stock_name, details))
+    elif normal_signal:
+        normal_results.append((code, stock_name, details))
+
+    print_results("严格买入信号", strict_results, period_name)
+    print_results("普通买入信号", normal_results, period_name)
+
+
 def main():
-    show_menu()
+    show_mode_menu()
+
+    while True:
+        mode = input("\n请输入选项 (1-2): ").strip()
+        if mode in ('1', '2'):
+            break
+        print("无效选项，请重新输入！")
+
+    show_period_menu()
 
     while True:
         choice = input("\n请输入选项 (1-8): ").strip()
@@ -1135,30 +1218,34 @@ def main():
     period, period_name, scale = StrictStockScreener.PERIOD_MAP[choice]
     print(f"\n已选择: {period_name}")
 
-    # 分钟线只有新浪一个源，降低并发避免限流；日线有两个源可以稍高
-    is_minute = period in ('1min', '5min', '15min', '30min', '60min')
-    max_workers = 4 if is_minute else 6
-    screener = StrictStockScreener(period=period, period_name=period_name,
-                                   max_workers=max_workers)
-    stock_list = screener.load_stock_list()
+    if mode == '1':
+        # 单独测试模式
+        test_single_stock(period, period_name)
+    else:
+        # 批量筛选模式
+        is_minute = period in ('1min', '5min', '15min', '30min', '60min')
+        max_workers = 4 if is_minute else 6
+        screener = StrictStockScreener(period=period, period_name=period_name,
+                                       max_workers=max_workers)
+        stock_list = screener.load_stock_list()
 
-    if not stock_list:
-        print("股票列表为空")
-        return
+        if not stock_list:
+            print("股票列表为空")
+            return
 
-    normal_results, strict_results = screener.screen_all_stocks(stock_list)
+        normal_results, strict_results = screener.screen_all_stocks(stock_list)
 
-    print_results("严格买入信号", strict_results, period_name)
-    print_results("普通买入信号", normal_results, period_name)
+        print_results("严格买入信号", strict_results, period_name)
+        print_results("普通买入信号", normal_results, period_name)
 
-    if not normal_results and not strict_results:
-        print("\n没有找到符合买入条件的股票")
+        if not normal_results and not strict_results:
+            print("\n没有找到符合买入条件的股票")
 
-    if normal_results or strict_results:
-        print(f"\n{'=' * 80}")
-        print(f"  汇总: 严格 {len(strict_results)} 只 + 普通 {len(normal_results)} 只 "
-              f"= 共 {len(strict_results) + len(normal_results)} 只")
-        print(f"{'=' * 80}")
+        if normal_results or strict_results:
+            print(f"\n{'=' * 80}")
+            print(f"  汇总: 严格 {len(strict_results)} 只 + 普通 {len(normal_results)} 只 "
+                  f"= 共 {len(strict_results) + len(normal_results)} 只")
+            print(f"{'=' * 80}")
 
 
 if __name__ == "__main__":
