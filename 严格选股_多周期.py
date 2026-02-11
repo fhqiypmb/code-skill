@@ -798,20 +798,29 @@ class StrictStockScreener:
 
         normal_buy = normal_shrink and vol_moderate
 
-        # ===== MA5止跌：MA5 >= 20天前的MA5 =====
+        # ===== MA5止跌 + 底部企稳（仅日线/周线/月线）=====
+        # 分钟线上这两个条件无意义（20根5分钟K线≠20天，120根≠120日）
+        is_daily_or_above = self.period in ('240min', 'weekly', 'monthly')
+
         ma5_rising = False
-        if idx >= 24 and curr.get('ma5') is not None and data[idx - 20].get('ma5') is not None:
-            ma5_rising = curr['ma5'] >= data[idx - 20]['ma5']
-
-        # ===== 底部企稳：30日最低价 >= 120日最低价 =====
         bottom_stable = False
-        if idx >= 119:
-            low_30 = min(data[k]['low'] for k in range(idx - 29, idx + 1))
-            low_120 = min(data[k]['low'] for k in range(idx - 119, idx + 1))
-            bottom_stable = low_30 >= low_120
+        if is_daily_or_above:
+            # MA5止跌：MA5 >= 20天前的MA5
+            if idx >= 24 and curr.get('ma5') is not None and data[idx - 20].get('ma5') is not None:
+                ma5_rising = curr['ma5'] >= data[idx - 20]['ma5']
+            # 底部企稳：30日最低价 >= 120日最低价
+            if idx >= 119:
+                low_30 = min(data[k]['low'] for k in range(idx - 29, idx + 1))
+                low_120 = min(data[k]['low'] for k in range(idx - 119, idx + 1))
+                bottom_stable = low_30 >= low_120
 
-        strict_buy = (strict_shrink and vol_moderate and gap_days > 0
-                      and gold_vol_enough and ma5_rising and bottom_stable)
+        if is_daily_or_above:
+            strict_buy = (strict_shrink and vol_moderate and gap_days > 0
+                          and gold_vol_enough and ma5_rising and bottom_stable)
+        else:
+            # 分钟线严格买入：不含MA5止跌/底部企稳
+            strict_buy = (strict_shrink and vol_moderate and gap_days > 0
+                          and gold_vol_enough)
 
         details['ma5_rising'] = ma5_rising
         details['bottom_stable'] = bottom_stable
@@ -830,8 +839,19 @@ class StrictStockScreener:
         if data is None:
             return False, False, {}, None
 
-        normal_buy, strict_buy, details = self._check_signal_at(data, len(data) - 1)
+        # 校验最后一根K线日期：年份必须是近两年内，过滤掉数据源返回的脏数据
         last_bar_time = data[-1]['date'] if data else None
+        if last_bar_time:
+            try:
+                bar_year = int(last_bar_time[:4])
+                from datetime import datetime as _dt
+                current_year = _dt.now().year
+                if bar_year < current_year - 1:
+                    return False, False, {}, last_bar_time
+            except (ValueError, IndexError):
+                pass
+
+        normal_buy, strict_buy, details = self._check_signal_at(data, len(data) - 1)
         return normal_buy, strict_buy, details, last_bar_time
 
     def load_stock_list(self) -> List[Tuple[str, str]]:
