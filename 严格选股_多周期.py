@@ -539,13 +539,15 @@ class StrictStockScreener:
             data[i]['is_yin'] = data[i]['close'] < data[i]['open']
 
         # 预计算金叉死叉（带开口要求，对齐金叉.txt）
+        # 开口阈值减1作为容差，弥补数据源与通达信的MA精度差异
+        adjusted_threshold = max(self.open_threshold - 1, 1)
         # 第一遍：计算开口条件、简单金叉/死叉
         for i in range(n):
             curr_d = data[i]
             if curr_d['ma20'] is not None and curr_d['ma30'] is not None:
                 diff = curr_d['ma20'] - curr_d['ma30']
-                # 开口条件：差值*10000 >= 收盘价*开口阈值
-                curr_d['_has_open'] = (diff * 10000 >= curr_d['close'] * self.open_threshold)
+                # 开口条件：差值*10000 >= 收盘价*调整后阈值
+                curr_d['_has_open'] = (diff * 10000 >= curr_d['close'] * adjusted_threshold)
             else:
                 curr_d['_has_open'] = False
 
