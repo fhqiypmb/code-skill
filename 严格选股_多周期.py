@@ -395,7 +395,7 @@ class SourceRateLimiter:
 
 
 # 全局速率限制器：每个数据源每秒最多2次请求（新浪单源需更保守）
-_rate_limiter = SourceRateLimiter(max_per_sec=10.0)
+_rate_limiter = SourceRateLimiter(max_per_sec=20.0)
 
 
 def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
@@ -456,11 +456,24 @@ class StrictStockScreener:
         'monthly': 9985,
     }
 
+    # 开口阈值映射（万分比，对齐金叉.txt）
+    OPEN_THRESHOLD_MAP = {
+        '1min': 18,
+        '5min': 15,
+        '15min': 15,
+        '30min': 20,
+        '60min': 15,
+        '240min': 20,
+        'weekly': 12,
+        'monthly': 10,
+    }
+
     def __init__(self, period: str = '240min', period_name: str = '日线',
                  max_workers: int = 8, debug: bool = False):
         self.period = period
         self.period_name = period_name
         self.tolerance = self.TOLERANCE_MAP.get(period, 9993)
+        self.open_threshold = self.OPEN_THRESHOLD_MAP.get(period, 15)   # 开口阈值
         self.ma_short = 20  # MA3 in 通达信
         self.ma_long = 30   # MA4 in 通达信
         self.max_workers = max_workers
@@ -525,22 +538,53 @@ class StrictStockScreener:
             data[i]['is_yang'] = data[i]['close'] > data[i]['open']
             data[i]['is_yin'] = data[i]['close'] < data[i]['open']
 
-        # 预计算金叉死叉（标准CROSS逻辑）
+        # 预计算金叉死叉（带开口要求，对齐金叉.txt）
+        # 第一遍：计算开口条件、简单金叉/死叉
+        for i in range(n):
+            curr_d = data[i]
+            if curr_d['ma20'] is not None and curr_d['ma30'] is not None:
+                diff = curr_d['ma20'] - curr_d['ma30']
+                # 开口条件：差值*10000 >= 收盘价*开口阈值
+                curr_d['_has_open'] = (diff * 10000 >= curr_d['close'] * self.open_threshold)
+            else:
+                curr_d['_has_open'] = False
+
         data[0]['gold_cross'] = False
         data[0]['dead_cross'] = False
+        data[0]['_simple_cross'] = False
+        # 记录本轮简单金叉是否有效（未被死叉打断）
+        in_uptrend = False  # 当前是否在简单金叉后的上穿周期内
+
         for i in range(1, n):
-            prev, curr = data[i - 1], data[i]
+            prev, curr_d = data[i - 1], data[i]
             if (prev['ma20'] is None or prev['ma30'] is None or
-                    curr['ma20'] is None or curr['ma30'] is None):
+                    curr_d['ma20'] is None or curr_d['ma30'] is None):
                 data[i]['gold_cross'] = False
                 data[i]['dead_cross'] = False
-            else:
-                p_ma20, p_ma30 = prev['ma20'], prev['ma30']
-                c_ma20, c_ma30 = curr['ma20'], curr['ma30']
-                # 金叉：前一根 ma20 <= ma30，当前 ma20 > ma30
-                data[i]['gold_cross'] = (p_ma20 <= p_ma30) and (c_ma20 > c_ma30)
-                # 死叉：前一根 ma20 >= ma30，当前 ma20 < ma30
-                data[i]['dead_cross'] = (p_ma20 >= p_ma30) and (c_ma20 < c_ma30)
+                data[i]['_simple_cross'] = False
+                continue
+
+            p_ma20, p_ma30 = prev['ma20'], prev['ma30']
+            c_ma20, c_ma30 = curr_d['ma20'], curr_d['ma30']
+
+            # 简单金叉：前一根 ma20 <= ma30，当前 ma20 > ma30
+            simple_cross = (p_ma20 <= p_ma30) and (c_ma20 > c_ma30)
+            data[i]['_simple_cross'] = simple_cross
+
+            # 死叉：前一根 ma20 >= ma30，当前 ma20 < ma30
+            dead_cross = (p_ma20 >= p_ma30) and (c_ma20 < c_ma30)
+            data[i]['dead_cross'] = dead_cross
+
+            # 维护本轮上穿状态
+            if simple_cross:
+                in_uptrend = True
+            if dead_cross:
+                in_uptrend = False
+
+            # 金叉日：本轮上穿有效期间，差值首次达到开口阈值
+            data[i]['gold_cross'] = (curr_d['_has_open'] and
+                                     not prev.get('_has_open', False) and
+                                     in_uptrend)
 
         return data
 
