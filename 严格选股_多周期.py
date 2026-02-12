@@ -525,10 +525,7 @@ class StrictStockScreener:
             data[i]['is_yang'] = data[i]['close'] > data[i]['open']
             data[i]['is_yin'] = data[i]['close'] < data[i]['open']
 
-        # 预计算金叉死叉
-        # 使用相对阈值判断均线是否"明确分开"，过滤粘合期的假金叉/假死叉
-        # 通达信在均线粘合时倾向于延迟确认，用相对阈值模拟这一行为
-        # 阈值=均线值的万分之一，例如股价14元时阈值约0.0014
+        # 预计算金叉死叉（标准CROSS逻辑）
         data[0]['gold_cross'] = False
         data[0]['dead_cross'] = False
         for i in range(1, n):
@@ -540,15 +537,10 @@ class StrictStockScreener:
             else:
                 p_ma20, p_ma30 = prev['ma20'], prev['ma30']
                 c_ma20, c_ma30 = curr['ma20'], curr['ma30']
-
-                # 相对阈值：均线值的万分之一
-                eps_prev = (p_ma20 + p_ma30) / 2 * 0.0001
-                eps_curr = (c_ma20 + c_ma30) / 2 * 0.0001
-
-                # 金叉：前一根MA20明确低于MA30，当前MA20明确高于MA30
-                data[i]['gold_cross'] = (p_ma20 < p_ma30 - eps_prev) and (c_ma20 > c_ma30 + eps_curr)
-                # 死叉：前一根MA20明确高于MA30，当前MA20明确低于MA30
-                data[i]['dead_cross'] = (p_ma20 > p_ma30 + eps_prev) and (c_ma20 < c_ma30 - eps_curr)
+                # 金叉：前一根 ma20 <= ma30，当前 ma20 > ma30
+                data[i]['gold_cross'] = (p_ma20 <= p_ma30) and (c_ma20 > c_ma30)
+                # 死叉：前一根 ma20 >= ma30，当前 ma20 < ma30
+                data[i]['dead_cross'] = (p_ma20 >= p_ma30) and (c_ma20 < c_ma30)
 
         return data
 
