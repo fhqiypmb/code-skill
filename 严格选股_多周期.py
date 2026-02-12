@@ -457,13 +457,34 @@ class StrictStockScreener:
     }
 
     def __init__(self, period: str = '240min', period_name: str = '日线',
-                 max_workers: int = 8):
+                 max_workers: int = 8, debug: bool = False):
         self.period = period
         self.period_name = period_name
         self.tolerance = self.TOLERANCE_MAP.get(period, 9993)
         self.ma_short = 20  # MA3 in 通达信
         self.ma_long = 30   # MA4 in 通达信
         self.max_workers = max_workers
+        self.debug = debug  # 调试模式
+
+        # 动态调整搜索窗口大小
+        # 分钟周期下，20根K线时间太短，容易漏掉形态，需适当放大
+        if period == '1min':
+            self.window_size = 240  # 4小时
+        elif period == '5min':
+            self.window_size = 120  # 约2天 (48*2.5) -> 改为120根(10小时, 2.5个交易日)
+        elif period == '15min':
+            self.window_size = 80   # 约5天 (16*5) -> 改为80根(20小时, 5个交易日)
+        elif period == '30min':
+            self.window_size = 60   # 约7.5天
+        elif period == '60min':
+            self.window_size = 40   # 约10天
+        else:
+            self.window_size = 20   # 日/周/月保持20
+
+    def _log(self, msg: str):
+        """调试日志"""
+        if self.debug:
+            print(f"[DEBUG] {msg}")
 
     def _prepare_data(self, raw: List[Dict]) -> Optional[List[Dict]]:
         """清洗并预计算K线数据：MA、金叉、死叉、阴阳线、MA5止跌、底部企稳"""
@@ -594,7 +615,7 @@ class StrictStockScreener:
 
             k_dist_gold = pos - k_gold_idx
             # TDX: 阴线量:=IF(YX1,REF(VOL,1),YXL2); 这是一个嵌套结构，越近的优先级越高
-            for off in range(1, 21):
+            for off in range(1, self.window_size + 1):
                 ci = pos - off
                 if ci < 0:
                     continue
@@ -622,7 +643,8 @@ class StrictStockScreener:
             # 计算 pos 位置及其之前的所有倍量阳标记
             dv_flags = {}
             # 扫描范围：需要包含 pos 往前 10 根（用于首倍判定）
-            start_scan = max(0, pos - 30)
+            # CHANGED: 这里的范围应该包含到 self.window_size
+            start_scan = max(0, pos - self.window_size - 10)
             for k in range(start_scan, pos + 1):
                 # 1. 找 k 点对应的金叉日
                 k_gold_idx = -1
@@ -633,7 +655,7 @@ class StrictStockScreener:
                 if k_gold_idx == -1: continue
 
                 k_dist_gold = k - k_gold_idx
-                if k_dist_gold <= 0 or k_dist_gold > 20: continue
+                if k_dist_gold <= 0 or k_dist_gold > self.window_size: continue
 
                 k_gold_vol = data[k_gold_idx]['volume']
 
@@ -689,7 +711,7 @@ class StrictStockScreener:
 
             # 确认量能达标（QRY: N<距金叉天数 AND N<>距首倍）
             max_yang_vol = 0
-            for n in range(1, 21):
+            for n in range(1, self.window_size + 1):
                 kk = pos - n
                 if kk < 0:
                     continue
@@ -719,7 +741,7 @@ class StrictStockScreener:
 
         # 普通阴线缩量（对齐通达信YXM：从首倍量位置往金叉方向看，最多20根）
         max_yin_vol_between = 0
-        for n in range(1, 21):
+        for n in range(1, self.window_size + 1):
             k = first_double_idx - n
             if k < 0:
                 continue
@@ -737,7 +759,7 @@ class StrictStockScreener:
         # 严格缩量（对齐通达信YJ范围）
         strict_shrink = True
         # 第一部分：YJ1~YJ20
-        for n in range(1, 21):
+        for n in range(1, self.window_size + 1):
             k = first_double_idx - n
             if k < 0:
                 continue
