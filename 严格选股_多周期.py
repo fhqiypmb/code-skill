@@ -395,7 +395,7 @@ class SourceRateLimiter:
 
 
 # 全局速率限制器：每个数据源每秒最多2次请求（新浪单源需更保守）
-_rate_limiter = SourceRateLimiter(max_per_sec=20.0)
+_rate_limiter = SourceRateLimiter(max_per_sec=10.0)
 
 
 def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
@@ -526,8 +526,9 @@ class StrictStockScreener:
             data[i]['is_yin'] = data[i]['close'] < data[i]['open']
 
         # 预计算金叉死叉
-        # 定义一个极小值用于浮点数比较，模拟通达信的数值特性
-        EPS = 1e-8
+        # 使用相对阈值判断均线是否"明确分开"，过滤粘合期的假金叉/假死叉
+        # 通达信在均线粘合时倾向于延迟确认，用相对阈值模拟这一行为
+        # 阈值=均线值的万分之一，例如股价14元时阈值约0.0014
         data[0]['gold_cross'] = False
         data[0]['dead_cross'] = False
         for i in range(1, n):
@@ -537,15 +538,17 @@ class StrictStockScreener:
                 data[i]['gold_cross'] = False
                 data[i]['dead_cross'] = False
             else:
-                # TDX CROSS(A,B) = prev_A <= prev_B AND curr_A > curr_B
-                # 修复判定逻辑：由于浮点数精度，A <= B 应当包含 A 非常接近 B 的情况
                 p_ma20, p_ma30 = prev['ma20'], prev['ma30']
                 c_ma20, c_ma30 = curr['ma20'], curr['ma30']
 
-                # 金叉：前一根 ma20 <= ma30，当前 ma20 > ma30
-                data[i]['gold_cross'] = (p_ma20 <= p_ma30 + EPS) and (c_ma20 > c_ma30 + EPS)
-                # 死叉：前一根 ma20 >= ma30，当前 ma20 < ma30
-                data[i]['dead_cross'] = (p_ma20 >= p_ma30 - EPS) and (c_ma20 < c_ma30 - EPS)
+                # 相对阈值：均线值的万分之一
+                eps_prev = (p_ma20 + p_ma30) / 2 * 0.0001
+                eps_curr = (c_ma20 + c_ma30) / 2 * 0.0001
+
+                # 金叉：前一根MA20明确低于MA30，当前MA20明确高于MA30
+                data[i]['gold_cross'] = (p_ma20 < p_ma30 - eps_prev) and (c_ma20 > c_ma30 + eps_curr)
+                # 死叉：前一根MA20明确高于MA30，当前MA20明确低于MA30
+                data[i]['dead_cross'] = (p_ma20 > p_ma30 + eps_prev) and (c_ma20 < c_ma30 - eps_curr)
 
         return data
 
@@ -680,6 +683,7 @@ class StrictStockScreener:
                         break
                 if is_first:
                     fd_idx = k
+                    break  # 找到金叉后第一个倍量阳即停止，避免取到后面的
             return fd_idx
 
         # ===== 辅助函数：在任意位置pos判断是否为确认阳 =====
