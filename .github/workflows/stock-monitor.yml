@@ -32,6 +32,10 @@ on:
           - 30min
           - 240min
 
+concurrency:
+  group: stock-monitor
+  cancel-in-progress: true
+
 jobs:
   # 更新股票列表任务
   update-stock-list:
