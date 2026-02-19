@@ -395,7 +395,7 @@ class SourceRateLimiter:
 
 
 # 全局速率限制器：每个数据源每秒最多2次请求（新浪单源需更保守）
-_rate_limiter = SourceRateLimiter(max_per_sec=30.0)
+_rate_limiter = SourceRateLimiter(max_per_sec=15.0)
 
 
 def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
@@ -983,8 +983,11 @@ class StrictStockScreener:
                     fail_list.append((src.__name__, err[:40]))
         return ok_list, fail_list
 
-    def screen_all_stocks(self, stock_list: List[Tuple[str, str]]):
-        """并行批量选股 - 多数据源分散请求"""
+    def screen_all_stocks(self, stock_list: List[Tuple[str, str]], on_signal=None):
+        """并行批量选股 - 多数据源分散请求
+        on_signal: 可选回调函数，签名 on_signal(code, name, signal_type, details)
+                   signal_type: 'strict' 或 'normal'
+                   扫到信号立即调用，不等全部扫完"""
         total = len(stock_list)
         is_minute = self.period in ('1min', '5min', '15min', '30min', '60min')
         num_sources = len(_SOURCES_MINUTE) if is_minute else len(_SOURCES_DAILY)
@@ -1085,6 +1088,11 @@ class StrictStockScreener:
                                   f"放量阳:{details.get('first_double_date','')} "
                                   f"确认阳:{details.get('date','')} "
                                   f"{eta_str}")
+                        if on_signal:
+                            try:
+                                on_signal(code, name, 'strict', details)
+                            except Exception:
+                                pass
                     elif normal_signal:
                         normal_results.append((code, name, details))
                         with _print_lock:
@@ -1094,6 +1102,11 @@ class StrictStockScreener:
                                   f"放量阳:{details.get('first_double_date','')} "
                                   f"确认阳:{details.get('date','')} "
                                   f"{eta_str}")
+                        if on_signal:
+                            try:
+                                on_signal(code, name, 'normal', details)
+                            except Exception:
+                                pass
                     else:
                         with _print_lock:
                             print(f"\r[{completed}/{total}] {code} {name:<10} "

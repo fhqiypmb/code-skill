@@ -213,9 +213,29 @@ def save_signals_to_file(period_name: str, normal_results: list, strict_results:
     logger.info(f"信号已保存到 {filename}")
 
 
-# ==================== 单周期扫描 ====================
+# ==================== 单信号即时推送 ====================
+def _format_single_signal(period_name: str, code: str, name: str,
+                          signal_type: str, details: dict) -> str:
+    """格式化单只股票的信号消息"""
+    tag = "🔴 严格买入" if signal_type == 'strict' else "🟡 普通买入"
+    lines = [
+        f"## {tag} | {period_name}",
+        "",
+        f"**{code} {name}**",
+        "",
+        f"| 项目 | 值 |",
+        f"|------|------|",
+        f"| 收盘价 | {details.get('close', 0):.2f} |",
+        f"| 金叉日期 | {details.get('gold_cross_date', '')} |",
+        f"| 放量阳日期 | {details.get('first_double_date', '')} |",
+        f"| 确认阳日期 | {details.get('date', '')} |",
+    ]
+    return "\n".join(lines)
+
+
+# ==================== 单周期扫描（边扫边推） ====================
 def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedup: SignalDedup):
-    """执行一个周期的选股扫描"""
+    """执行一个周期的选股扫描，扫到信号立即推送"""
     period_name = period_cfg['name']
     period_code = period_cfg['code']
     max_workers = period_cfg['max_workers']
@@ -231,42 +251,39 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         max_workers=max_workers
     )
 
-    normal_results, strict_results = s.screen_all_stocks(stock_list)
+    # 记录本轮推送的信号数
+    pushed_count = [0]  # 用list以便在闭包中修改
+
+    def on_signal(code, name, signal_type, details):
+        """回调：扫到信号立即去重+推送+保存"""
+        signal_date = details.get('date', '')
+
+        # 去重
+        if not dedup.is_new(period_code, code, signal_date, signal_type):
+            logger.info(f"[{period_name}] {code} {name} 已推送过，跳过")
+            return
+
+        dedup.mark_sent(period_code, code, signal_date, signal_type)
+
+        # 保存到文件
+        if signal_type == 'strict':
+            save_signals_to_file(period_name, [], [(code, name, details)])
+        else:
+            save_signals_to_file(period_name, [(code, name, details)], [])
+
+        # 立即推送钉钉
+        tag = "严格" if signal_type == 'strict' else "普通"
+        title = f"{tag}买入 | {period_name} | {code} {name}"
+        content = _format_single_signal(period_name, code, name, signal_type, details)
+        send_dingtalk(webhook, secret, title, content)
+        pushed_count[0] += 1
+
+    normal_results, strict_results = s.screen_all_stocks(stock_list, on_signal=on_signal)
 
     elapsed = time.time() - start
     logger.info(f"[{period_name}] 扫描完成，耗时 {elapsed:.0f}s，"
-                f"严格 {len(strict_results)} + 普通 {len(normal_results)}")
-
-    if not normal_results and not strict_results:
-        return
-
-    # 保存到文件
-    save_signals_to_file(period_name, normal_results, strict_results)
-
-    # 去重过滤
-    new_normal = []
-    for code, name, details in normal_results:
-        signal_date = details.get('date', '')
-        if dedup.is_new(period_code, code, signal_date, 'normal'):
-            new_normal.append((code, name, details))
-            dedup.mark_sent(period_code, code, signal_date, 'normal')
-
-    new_strict = []
-    for code, name, details in strict_results:
-        signal_date = details.get('date', '')
-        if dedup.is_new(period_code, code, signal_date, 'strict'):
-            new_strict.append((code, name, details))
-            dedup.mark_sent(period_code, code, signal_date, 'strict')
-
-    if not new_normal and not new_strict:
-        logger.info(f"[{period_name}] 信号均已推送过，跳过")
-        return
-
-    # 推送微信
-    total_new = len(new_normal) + len(new_strict)
-    title = f"选股信号 | {period_name} | {total_new}只"
-    content = format_signal_message(period_name, new_normal, new_strict)
-    send_dingtalk(webhook, secret, title, content)
+                f"严格 {len(strict_results)} + 普通 {len(normal_results)}，"
+                f"本轮推送 {pushed_count[0]} 条")
 
 
 # ==================== 一轮完整扫描 ====================
