@@ -395,7 +395,7 @@ class SourceRateLimiter:
 
 
 # 全局速率限制器：每个数据源每秒最多2次请求（新浪单源需更保守）
-_rate_limiter = SourceRateLimiter(max_per_sec=15.0)
+_rate_limiter = SourceRateLimiter(max_per_sec=30.0)
 
 
 def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
@@ -444,25 +444,27 @@ class StrictStockScreener:
         '8': ('monthly', '月线', 240),
     }
 
-    # 容差映射（对齐通达信PERIOD: 0-1min 1-5min 2-15min 3-30min 4-60min 5-日 6-周 7-月）
+    # 容差映射（与金叉.txt同步）
+    # 小周期放宽容差，降低对价格精度的敏感度
     TOLERANCE_MAP = {
-        '1min': 9999,
-        '5min': 9998,
-        '15min': 9997,
-        '30min': 9996,
-        '60min': 9995,
+        '1min': 9970,
+        '5min': 9970,
+        '15min': 9970,
+        '30min': 9970,
+        '60min': 9980,
         '240min': 9993,
         'weekly': 9990,
         'monthly': 9985,
     }
 
-    # 开口阈值映射（万分比，对齐金叉.txt）
+    # 开口阈值映射（万分比，与金叉.txt同步）
+    # 小周期降低阈值，降低对MA精度的敏感度
     OPEN_THRESHOLD_MAP = {
-        '1min': 18,
-        '5min': 15,
-        '15min': 15,
-        '30min': 20,
-        '60min': 15,
+        '1min': 8,
+        '5min': 8,
+        '15min': 8,
+        '30min': 8,
+        '60min': 10,
         '240min': 20,
         'weekly': 12,
         'monthly': 10,
@@ -619,7 +621,12 @@ class StrictStockScreener:
             if check_idx >= 0 and data[check_idx]['is_yin']:
                 max_yin_vol_before_gold = max(max_yin_vol_before_gold, data[check_idx]['volume'])
 
-        gold_vol_enough = gold_day_vol > max_yin_vol_before_gold
+        # 小周期放宽"金叉量够大"：>=50%即可（与金叉.txt同步）
+        is_minute_period = self.period in ('1min', '5min', '15min', '30min')
+        if is_minute_period:
+            gold_vol_enough = gold_day_vol >= max_yin_vol_before_gold * 0.5
+        else:
+            gold_vol_enough = gold_day_vol > max_yin_vol_before_gold
 
         # 如果金叉量不够大，且当前正在检查“严格买入”路径（或者该条件是强制的），则提前退出
         # 注意：通达信公式中 严格买入 包含 金叉量够大，普通买入（买入）不包含。
@@ -796,7 +803,8 @@ class StrictStockScreener:
 
         normal_shrink = max_yin_vol_between > 0 and max_yin_vol_between < gold_day_vol * 2
 
-        # 严格缩量（对齐通达信YJ范围）
+        # 严格缩量（与金叉.txt同步，小周期放宽到1.2倍）
+        shrink_limit = gold_day_vol * 1.2 if is_minute_period else gold_day_vol
         strict_shrink = True
         # 第一部分：YJ1~YJ20
         for n in range(1, self.window_size + 1):
@@ -809,7 +817,7 @@ class StrictStockScreener:
             else:
                 if not (n < gap_days):
                     continue
-            if data[k]['is_yin'] and data[k]['volume'] >= gold_day_vol:
+            if data[k]['is_yin'] and data[k]['volume'] >= shrink_limit:
                 strict_shrink = False
                 break
         # 第二部分：YZ1~YZ5
@@ -820,7 +828,7 @@ class StrictStockScreener:
                     continue
                 if not (n < dist_first_double):  # N<距首倍
                     continue
-                if data[k]['is_yin'] and data[k]['volume'] >= gold_day_vol:
+                if data[k]['is_yin'] and data[k]['volume'] >= shrink_limit:
                     strict_shrink = False
                     break
 
@@ -846,6 +854,7 @@ class StrictStockScreener:
             'ma30': curr['ma30'],
             'volume': curr['volume'],
             'gold_cross_date': data[gold_cross_idx]['date'],
+            'first_double_date': data[first_double_idx]['date'],
             'days_since_gold': dist_gold,
             'days_since_first_double': dist_first_double,
             'first_double_price': first_double_price,
@@ -1071,12 +1080,20 @@ class StrictStockScreener:
                         strict_results.append((code, name, details))
                         with _print_lock:
                             print(f"\r[{completed}/{total}] {code} {name:<10} "
-                                  f">>> 严格买入信号! <<< {eta_str}")
+                                  f">>> 严格买入信号! <<< "
+                                  f"金叉:{details.get('gold_cross_date','')} "
+                                  f"放量阳:{details.get('first_double_date','')} "
+                                  f"确认阳:{details.get('date','')} "
+                                  f"{eta_str}")
                     elif normal_signal:
                         normal_results.append((code, name, details))
                         with _print_lock:
                             print(f"\r[{completed}/{total}] {code} {name:<10} "
-                                  f">>> 普通买入信号 <<< {eta_str}")
+                                  f">>> 普通买入信号 <<< "
+                                  f"金叉:{details.get('gold_cross_date','')} "
+                                  f"放量阳:{details.get('first_double_date','')} "
+                                  f"确认阳:{details.get('date','')} "
+                                  f"{eta_str}")
                     else:
                         with _print_lock:
                             print(f"\r[{completed}/{total}] {code} {name:<10} "
@@ -1161,19 +1178,18 @@ def print_results(title: str, results: List[Tuple[str, str, Dict]], period_name:
     print(f"\n{'=' * 80}")
     print(f"  {title} ({period_name})  共 {len(results_sorted)} 只")
     print(f"{'=' * 80}")
-    print(f"  {'代码':<8} {'名称':<10} {'信号日期':<20} {'收盘价':>8} "
-          f"{'MA20':>8} {'MA30':>8} {'金叉日期':<12} {'距金叉':>5} {'距倍量':>5}")
-    print(f"  {'-' * 76}")
+    print(f"  {'代码':<8} {'名称':<10} {'收盘价':>8} "
+          f"{'金叉日期':<20} {'放量阳日期':<20} {'确认阳日期':<20}")
+    print(f"  {'-' * 90}")
 
     for code, name, d in results_sorted:
-        ma20_str = f"{d['ma20']:.2f}" if d.get('ma20') else "N/A"
-        ma30_str = f"{d['ma30']:.2f}" if d.get('ma30') else "N/A"
         vol_tag = " [爆量]" if d.get('vol_explode') else ""
-        print(f"  {code:<8} {name:<10} {d['date']:<20} {d['close']:>8.2f} "
-              f"{ma20_str:>8} {ma30_str:>8} {d.get('gold_cross_date', ''):>12} "
-              f"{d.get('days_since_gold', ''):>5} {d.get('days_since_first_double', ''):>5}{vol_tag}")
+        print(f"  {code:<8} {name:<10} {d['close']:>8.2f} "
+              f"{d.get('gold_cross_date', ''):<20} "
+              f"{d.get('first_double_date', ''):<20} "
+              f"{d.get('date', ''):<20}{vol_tag}")
 
-    print(f"  {'-' * 76}")
+    print(f"  {'-' * 90}")
 
 
 def _lookup_stock_name(code: str) -> str:
