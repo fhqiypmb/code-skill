@@ -33,6 +33,13 @@ spec.loader.exec_module(screener)
 
 from notifier import send_dingtalk, format_signal_message
 
+# 导入板块趋势分析模块
+try:
+    from stock_analyzer import analyze_stock, format_analysis_report
+    _HAS_ANALYZER = True
+except ImportError:
+    _HAS_ANALYZER = False
+
 # ==================== 日志配置 ====================
 logging.basicConfig(
     level=logging.INFO,
@@ -216,7 +223,7 @@ def save_signals_to_file(period_name: str, normal_results: list, strict_results:
 # ==================== 单信号即时推送 ====================
 def _format_single_signal(period_name: str, code: str, name: str,
                           signal_type: str, details: dict) -> str:
-    """格式化单只股票的信号消息"""
+    """格式化单只股票的信号消息 + 板块趋势分析"""
     tag = "🔴 严格买入" if signal_type == 'strict' else "🟡 普通买入"
     lines = [
         f"## {tag} | {period_name}",
@@ -230,6 +237,57 @@ def _format_single_signal(period_name: str, code: str, name: str,
         f"| 放量阳日期 | {details.get('first_double_date', '')} |",
         f"| 确认阳日期 | {details.get('date', '')} |",
     ]
+
+    # 板块趋势分析
+    if _HAS_ANALYZER:
+        try:
+            result = analyze_stock(code, name)
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            lines.append("### 📈 板块趋势分析")
+            lines.append("")
+
+            # 行业趋势
+            for sr in result.get('sector_results', []):
+                if sr['type'] == '行业':
+                    t = sr['trend']
+                    lines.append(f"- 行业 **{sr['name']}**: {t['trend']}  "
+                                 f"近5日{t.get('recent_5d_chg', 0):+.1f}%  "
+                                 f"近20日{t.get('recent_20d_chg', 0):+.1f}%")
+                    break
+
+            # 上升概念
+            concept_list = [sr for sr in result.get('sector_results', []) if sr['type'] == '概念']
+            rising = [sr for sr in concept_list if sr['trend'].get('score', 0) >= 55]
+            falling = [sr for sr in concept_list if sr['trend'].get('score', 0) < 30]
+            total_c = len(concept_list)
+
+            if rising:
+                names_str = ', '.join(f"{sr['name']}({sr['trend']['trend']})" for sr in rising[:5])
+                lines.append(f"- 上升概念({len(rising)}个): {names_str}")
+            if falling:
+                names_str = ', '.join(f"{sr['name']}({sr['trend']['trend']})" for sr in falling[:3])
+                lines.append(f"- 弱势概念({len(falling)}个): {names_str}")
+            if total_c > 0:
+                lines.append(f"- 概念总览: {total_c}个, {len(rising)}个上升, {len(falling)}个弱势")
+
+            # 新闻
+            news_info = result.get('news_info', {})
+            sentiment = news_info.get('sentiment', '中性')
+            hot = news_info.get('hot_keywords', [])
+            news_str = f"消息面{sentiment}"
+            if hot:
+                news_str += f"(热点: {','.join(hot)})"
+            lines.append(f"- {news_str}")
+
+            # 结论
+            prob = result.get('probability', 0)
+            lines.append(f"")
+            lines.append(f"**近期上涨概率: {prob}%**")
+        except Exception as e:
+            logger.warning(f"板块分析失败 {code}: {e}")
+
     return "\n".join(lines)
 
 
