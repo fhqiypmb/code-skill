@@ -293,7 +293,7 @@ def _format_single_signal(period_name: str, code: str, name: str,
 
 # ==================== 单周期扫描（边扫边推） ====================
 def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedup: SignalDedup):
-    """执行一个周期的选股扫描，扫到信号立即推送"""
+    """执行一个周期的选股扫描，扫到信号立即推送，并返回本轮推送的信号列表"""
     period_name = period_cfg['name']
     period_code = period_cfg['code']
     max_workers = period_cfg['max_workers']
@@ -309,8 +309,9 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         max_workers=max_workers
     )
 
-    # 记录本轮推送的信号数
+    # 记录本轮推送的信号
     pushed_count = [0]  # 用list以便在闭包中修改
+    pushed_signals = []  # 收集本轮推送的信号
 
     def on_signal(code, name, signal_type, details):
         """回调：扫到信号立即去重+推送+保存"""
@@ -336,6 +337,15 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         send_dingtalk(webhook, secret, title, content)
         pushed_count[0] += 1
 
+        # 收集信号用于汇总
+        pushed_signals.append({
+            'period': period_name,
+            'code': code,
+            'name': name,
+            'signal_type': signal_type,
+            'details': details,
+        })
+
     normal_results, strict_results = s.screen_all_stocks(stock_list, on_signal=on_signal)
 
     elapsed = time.time() - start
@@ -343,17 +353,65 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
                 f"严格 {len(strict_results)} + 普通 {len(normal_results)}，"
                 f"本轮推送 {pushed_count[0]} 条")
 
+    return pushed_signals
+
 
 # ==================== 一轮完整扫描 ====================
-def run_full_round(stock_list: list, webhook: str, secret: str, dedup: SignalDedup):
-    """依次扫描三个周期"""
+def _format_round_summary(all_signals: list, round_num: int) -> str:
+    """格式化一轮扫描的汇总消息"""
+    beijing_now = get_beijing_now().strftime('%H:%M')
+    lines = [f"## 📋 第{round_num}轮扫描汇总 ({beijing_now})", ""]
+
+    if not all_signals:
+        lines.append("本轮未发现新信号")
+        return "\n".join(lines)
+
+    # 按周期分组
+    from collections import OrderedDict
+    grouped = OrderedDict()
+    for sig in all_signals:
+        period = sig['period']
+        if period not in grouped:
+            grouped[period] = {'strict': [], 'normal': []}
+        grouped[period][sig['signal_type']].append(sig)
+
+    for period, sigs in grouped.items():
+        lines.append(f"### {period}")
+        lines.append("")
+        lines.append("| 类型 | 代码 | 名称 | 收盘价 | 信号日期 |")
+        lines.append("|------|------|------|--------|----------|")
+        for s in sigs['strict']:
+            d = s['details']
+            lines.append(f"| 🔴严格 | {s['code']} | {s['name']} | {d.get('close', 0):.2f} | {d.get('date', '')} |")
+        for s in sigs['normal']:
+            d = s['details']
+            lines.append(f"| 🟡普通 | {s['code']} | {s['name']} | {d.get('close', 0):.2f} | {d.get('date', '')} |")
+        lines.append("")
+
+    strict_total = sum(1 for s in all_signals if s['signal_type'] == 'strict')
+    normal_total = sum(1 for s in all_signals if s['signal_type'] == 'normal')
+    lines.append(f"**合计 {len(all_signals)} 只** (严格 {strict_total} + 普通 {normal_total})")
+
+    return "\n".join(lines)
+
+
+def run_full_round(stock_list: list, webhook: str, secret: str, dedup: SignalDedup,
+                   round_num: int = 0):
+    """依次扫描三个周期，最后推送整合汇总"""
     beijing_now = get_beijing_now().strftime('%H:%M:%S')
     logger.info(f"========== 开始新一轮扫描 (北京时间 {beijing_now}) ==========")
 
+    all_signals = []
     for period_cfg in PERIODS:
-        run_scan(period_cfg, stock_list, webhook, secret, dedup)
+        signals = run_scan(period_cfg, stock_list, webhook, secret, dedup)
+        all_signals.extend(signals)
 
-    logger.info(f"========== 本轮扫描完成 ==========")
+    logger.info(f"========== 本轮扫描完成，共 {len(all_signals)} 条新信号 ==========")
+
+    # 推送整合汇总消息
+    title = f"第{round_num}轮汇总 | 共{len(all_signals)}条信号"
+    content = _format_round_summary(all_signals, round_num)
+    send_dingtalk(webhook, secret, title, content)
 
 
 # ==================== 主循环 ====================
@@ -389,7 +447,7 @@ def main():
     # --now 模式：立即跑一次就退出
     if args.now:
         logger.info("立即扫描模式")
-        run_full_round(stock_list, webhook, secret, dedup)
+        run_full_round(stock_list, webhook, secret, dedup, round_num=1)
         return
 
     # 正常模式：循环到收盘
@@ -402,7 +460,7 @@ def main():
         if is_trading_time():
             round_count += 1
             logger.info(f"--- 第 {round_count} 轮 ---")
-            run_full_round(stock_list, webhook, secret, dedup)
+            run_full_round(stock_list, webhook, secret, dedup, round_num=round_count)
 
             # 跑完等5分钟
             if not is_after_trading():
