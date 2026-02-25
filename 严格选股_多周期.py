@@ -100,12 +100,15 @@ def get_total_paused_time() -> float:
         return _total_paused_time + extra
 
 def reset_control():
-    """重置控制状态（每次选股前调用）"""
+    """重置控制状态（每次选股前调用）
+    如果已收到外部停止信号（如SIGTERM），不清除停止状态"""
     global _control_state, _pause_start_time, _total_paused_time
+    # 已经是stopped状态时不重置（外部信号触发的停止优先）
+    if _stop_event.is_set():
+        return
     with _control_lock:
         _control_state = 'running'
     _pause_event.set()
-    _stop_event.clear()
     with _pause_time_lock:
         _pause_start_time = 0.0
         _total_paused_time = 0.0
@@ -402,7 +405,9 @@ class SourceRateLimiter:
         return self._limiters[src_name]
 
     def wait(self, src_name: str):
-        """请求前调用，会阻塞直到满足速率限制"""
+        """请求前调用，会阻塞直到满足速率限制。如果收到停止信号则抛出StopIteration"""
+        if _stop_event.is_set():
+            raise StopIteration("停止")
         lim = self._get_limiter(src_name)
         with lim['lock']:
             now = time.time()
@@ -441,7 +446,11 @@ def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
     从指定数据源获取K线，失败自动切换下一个数据源。
     source_idx 用于在多线程中分散到不同数据源。
     每个数据源请求前会受速率限制，被限流后自动指数退避。
+    收到停止信号时立即中止。
     """
+    if _stop_event.is_set():
+        return []
+
     is_minute = period in ('1min', '5min', '15min', '30min', '60min')
     sources = _SOURCES_MINUTE if is_minute else _SOURCES_DAILY
 
@@ -450,11 +459,13 @@ def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
     for src in order:
         src_name = src.__name__
         try:
-            _rate_limiter.wait(src_name)  # 等待速率限制
+            _rate_limiter.wait(src_name)  # 等待速率限制（内部也检查停止信号）
             data = src.fetch(code, period, datalen)
             if data and len(data) > 30:
                 _rate_limiter.report_success(src_name)  # 成功，减少退避
                 return data
+        except StopIteration:
+            return []
         except Exception as e:
             err_str = str(e)
             # 检测限流：HTTP 456(新浪)、连接断开(东财)、403等

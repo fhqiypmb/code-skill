@@ -92,9 +92,9 @@ jobs:
           DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
         run: |
           if [ "${{ github.event.inputs.mode }}" = "now" ]; then
-            python stock_monitor/monitor.py --now
+            exec python -u stock_monitor/monitor.py --now
           else
-            python stock_monitor/monitor.py
+            exec python -u stock_monitor/monitor.py
           fi
 
       - name: Commit signals

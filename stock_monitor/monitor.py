@@ -31,6 +31,11 @@ def _handle_signal(signum, frame):
     _shutdown = True
     logger = logging.getLogger(__name__)
     logger.info(f"收到终止信号 ({signum})，正在退出...")
+    # 通知 screener 线程池立即停止
+    try:
+        screener.set_control_state('stopped')
+    except Exception:
+        pass
 
 
 signal.signal(signal.SIGTERM, _handle_signal)
@@ -302,6 +307,9 @@ def _format_single_signal(period_name: str, code: str, name: str,
 # ==================== 单周期扫描（边扫边推） ====================
 def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedup: SignalDedup):
     """执行一个周期的选股扫描，扫到信号立即推送，并返回本轮推送的信号列表"""
+    if _shutdown:
+        return []
+
     period_name = period_cfg['name']
     period_code = period_cfg['code']
     max_workers = period_cfg['max_workers']
@@ -420,10 +428,16 @@ def run_full_round(stock_list: list, webhook: str, secret: str, dedup: SignalDed
 
     all_signals = []
     for period_cfg in PERIODS:
+        if _shutdown:
+            logger.info("收到终止信号，跳过剩余周期")
+            break
         signals = run_scan(period_cfg, stock_list, webhook, secret, dedup)
         all_signals.extend(signals)
 
-    logger.info(f"========== 本轮扫描完成，共 {len(all_signals)} 条新信号 ==========")
+    if _shutdown:
+        logger.info(f"========== 扫描被终止，已收集 {len(all_signals)} 条信号 ==========")
+    else:
+        logger.info(f"========== 本轮扫描完成，共 {len(all_signals)} 条新信号 ==========")
 
     # 推送整合汇总消息
     title = f"第{round_num}轮汇总 | 共{len(all_signals)}条信号"
@@ -464,7 +478,8 @@ def main():
     logger.info("  股票信号监控启动 (GitHub Actions 版)")
     logger.info(f"  运行环境: {'CI/GitHub Actions' if _is_ci else '本地'}")
     logger.info(f"  监控周期: {', '.join(p['name'] for p in PERIODS)}")
-    logger.info(f"  线程配置: {', '.join(f'{p[\"name\"]}={p[\"max_workers\"]}线程' for p in PERIODS)}")
+    threads_info = ', '.join(f"{p['name']}={p['max_workers']}线程" for p in PERIODS)
+    logger.info(f"  线程配置: {threads_info}")
     logger.info(f"  股票数量: {len(stock_list)}")
     logger.info(f"  扫描间隔: {SCAN_INTERVAL}s (跑完等5分钟)")
     logger.info(f"  钉钉推送: {'已配置' if webhook and secret else '未配置'}")
