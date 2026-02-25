@@ -353,6 +353,23 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
                 f"严格 {len(strict_results)} + 普通 {len(normal_results)}，"
                 f"本轮推送 {pushed_count[0]} 条")
 
+    # 检查限流情况并通知
+    throttle_info = screener.get_throttle_summary()
+    if throttle_info:
+        logger.warning(f"[{period_name}] {throttle_info}")
+        beijing_now = get_beijing_now().strftime('%H:%M')
+        title = f"⚠️ 数据源限流告警 | {period_name}"
+        content = "\n".join([
+            f"## ⚠️ 数据源限流告警",
+            "",
+            f"**周期**: {period_name}",
+            f"**时间**: {beijing_now}",
+            f"**详情**: {throttle_info}",
+            "",
+            f"扫描耗时 {elapsed:.0f}s，限流可能导致部分股票数据获取失败。",
+        ])
+        send_dingtalk(webhook, secret, title, content)
+
     return pushed_signals
 
 
