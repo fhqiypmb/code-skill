@@ -507,6 +507,6 @@ DRAWICON(买入,LOW*1,42);
 DRAWICON(买入爆量,HIGH*1,39);
 DRAWICON(买入 AND 严格买入 AND 位置达标,LOW*1,54);
 {筑底买入：画11号图标}
-DRAWICON(筑底买入,LOW,11);
+DRAWICON(筑底买入,HIGH,11);
 {突破买入：画9号图标（钻石）}
-DRAWICON(突破买入,LOW,9);
+DRAWICON(突破买入,HIGH,9);

@@ -65,12 +65,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== 配置 ====================
+# 环境自适应：CI/GitHub Actions 跨境延迟高，需更多线程填充I/O等待
+_is_ci = os.environ.get('GITHUB_ACTIONS') == 'true' or os.environ.get('CI') == 'true'
+
 # 扫描周期（顺序执行）
-PERIODS = [
-    {"name": "5分钟", "code": "5min", "max_workers": 4},
-    {"name": "30分钟", "code": "30min", "max_workers": 4},
-    {"name": "日线", "code": "240min", "max_workers": 6},
-]
+if _is_ci:
+    PERIODS = [
+        {"name": "5分钟", "code": "5min", "max_workers": 10},
+        {"name": "30分钟", "code": "30min", "max_workers": 10},
+        {"name": "日线", "code": "240min", "max_workers": 14},
+    ]
+else:
+    PERIODS = [
+        {"name": "5分钟", "code": "5min", "max_workers": 4},
+        {"name": "30分钟", "code": "30min", "max_workers": 4},
+        {"name": "日线", "code": "240min", "max_workers": 6},
+    ]
 
 # 每轮扫描完成后等待时间（秒）
 SCAN_INTERVAL = 300  # 5分钟
@@ -452,7 +462,9 @@ def main():
 
     logger.info("=" * 60)
     logger.info("  股票信号监控启动 (GitHub Actions 版)")
+    logger.info(f"  运行环境: {'CI/GitHub Actions' if _is_ci else '本地'}")
     logger.info(f"  监控周期: {', '.join(p['name'] for p in PERIODS)}")
+    logger.info(f"  线程配置: {', '.join(f'{p[\"name\"]}={p[\"max_workers\"]}线程' for p in PERIODS)}")
     logger.info(f"  股票数量: {len(stock_list)}")
     logger.info(f"  扫描间隔: {SCAN_INTERVAL}s (跑完等5分钟)")
     logger.info(f"  钉钉推送: {'已配置' if webhook and secret else '未配置'}")

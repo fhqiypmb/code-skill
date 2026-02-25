@@ -328,6 +328,36 @@ _SOURCES_MINUTE = [SinaKline]
 _SOURCES_DAILY = [SinaKline]
 
 
+# ==================== 环境检测 ====================
+def _is_ci() -> bool:
+    """检测是否在 CI/GitHub Actions 环境中运行"""
+    return os.environ.get('GITHUB_ACTIONS') == 'true' or os.environ.get('CI') == 'true'
+
+
+def _get_env_config() -> dict:
+    """根据运行环境返回适配的配置参数
+    CI环境（GitHub Actions 在美国）网络延迟高，需要更多线程来填充I/O等待时间，
+    同时跨境请求本身就慢，被限流概率低，可适当放宽速率限制。
+    """
+    if _is_ci():
+        return {
+            'max_per_sec': 18.0,       # CI跨境延迟高，放宽限速
+            'max_workers_minute': 10,   # 分钟线线程数
+            'max_workers_daily': 14,    # 日线线程数
+            'env_name': 'CI/GitHub Actions',
+        }
+    else:
+        return {
+            'max_per_sec': 13.0,       # 本地国内直连，保守限速
+            'max_workers_minute': 4,    # 本地线程数
+            'max_workers_daily': 6,     # 本地线程数
+            'env_name': '本地',
+        }
+
+
+_env_config = _get_env_config()
+
+
 # 限流计数器（线程安全）
 _throttle_counts = {}  # {数据源名: 次数}
 _throttle_lock = threading.Lock()
@@ -401,8 +431,8 @@ class SourceRateLimiter:
                     lim['backoff'] = 0.0
 
 
-# 全局速率限制器：每个数据源每秒最多2次请求（新浪单源需更保守）
-_rate_limiter = SourceRateLimiter(max_per_sec=13.0)
+# 全局速率限制器：根据环境自适应（CI跨境延迟高，放宽；本地保守）
+_rate_limiter = SourceRateLimiter(max_per_sec=_env_config['max_per_sec'])
 
 
 def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
@@ -1121,9 +1151,9 @@ class StrictStockScreener:
 
         print(f"\n{'=' * 80}")
         print(f"  严格选股程序 - 周期: {self.period_name}")
+        print(f"  运行环境: {_env_config['env_name']}  速率限制: ≤{_env_config['max_per_sec']:.0f}次/秒")
         print(f"  待分析: {total} 只股票")
         print(f"  并行线程: {self.max_workers}  数据源: {num_sources}个")
-        print(f"  速率限制: 每数据源 ≤3次/秒，限流自动退避(2-8s)")
 
         # 测试数据源可用性
         ok_list, fail_list = self._check_sources()
@@ -1435,7 +1465,7 @@ def main():
     else:
         # 批量筛选模式
         is_minute = period in ('1min', '5min', '15min', '30min', '60min')
-        max_workers = 4 if is_minute else 6
+        max_workers = _env_config['max_workers_minute'] if is_minute else _env_config['max_workers_daily']
         screener = StrictStockScreener(period=period, period_name=period_name,
                                        max_workers=max_workers)
         stock_list = screener.load_stock_list()
