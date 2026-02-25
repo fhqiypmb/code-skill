@@ -15,11 +15,26 @@ import os
 import sys
 import time
 import json
+import signal
 import logging
 import argparse
 import importlib.util
 from datetime import datetime, timedelta
 from typing import List, Tuple
+
+# ==================== 优雅退出 ====================
+_shutdown = False
+
+
+def _handle_signal(signum, frame):
+    global _shutdown
+    _shutdown = True
+    logger = logging.getLogger(__name__)
+    logger.info(f"收到终止信号 ({signum})，正在退出...")
+
+
+signal.signal(signal.SIGTERM, _handle_signal)
+signal.signal(signal.SIGINT, _handle_signal)
 
 # 将上级目录加入路径
 PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -406,6 +421,14 @@ def run_full_round(stock_list: list, webhook: str, secret: str, dedup: SignalDed
     send_dingtalk(webhook, secret, title, content)
 
 
+def _interruptible_sleep(seconds: int):
+    """可中断的sleep，每秒检查一次退出标志"""
+    for _ in range(int(seconds)):
+        if _shutdown:
+            return
+        time.sleep(1)
+
+
 # ==================== 主循环 ====================
 def main():
     parser = argparse.ArgumentParser(description='股票信号监控')
@@ -444,7 +467,7 @@ def main():
 
     # 正常模式：循环到收盘
     round_count = 0
-    while True:
+    while not _shutdown:
         if is_after_trading():
             logger.info("已收盘，退出")
             break
@@ -454,25 +477,25 @@ def main():
             logger.info(f"--- 第 {round_count} 轮 ---")
             run_full_round(stock_list, webhook, secret, dedup, round_num=round_count)
 
-            # 跑完等5分钟
-            if not is_after_trading():
+            # 跑完等5分钟（可中断）
+            if not is_after_trading() and not _shutdown:
                 logger.info(f"等待 {SCAN_INTERVAL}s 后开始下一轮...")
-                time.sleep(SCAN_INTERVAL)
+                _interruptible_sleep(SCAN_INTERVAL)
 
         elif is_before_trading():
             wait = seconds_to_next_session()
             next_time = (get_beijing_now() + timedelta(seconds=wait)).strftime('%H:%M')
             logger.info(f"未开盘，等待到 {next_time} ({wait}s)")
-            time.sleep(wait)
+            _interruptible_sleep(wait)
 
         elif is_lunch_break():
             wait = seconds_to_next_session()
             next_time = (get_beijing_now() + timedelta(seconds=wait)).strftime('%H:%M')
             logger.info(f"午休中，等待到 {next_time} ({wait}s)")
-            time.sleep(wait)
+            _interruptible_sleep(wait)
 
         else:
-            time.sleep(30)
+            _interruptible_sleep(30)
 
     logger.info(f"今日共完成 {round_count} 轮扫描")
 
