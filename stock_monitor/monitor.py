@@ -257,20 +257,12 @@ def _format_single_signal(period_name: str, code: str, name: str,
                                  f"近20日{t.get('recent_20d_chg', 0):+.1f}%")
                     break
 
-            # 上升概念
-            concept_list = [sr for sr in result.get('sector_results', []) if sr['type'] == '概念']
-            rising = [sr for sr in concept_list if sr['trend'].get('score', 0) >= 55]
-            falling = [sr for sr in concept_list if sr['trend'].get('score', 0) < 30]
-            total_c = len(concept_list)
-
-            if rising:
-                names_str = ', '.join(f"{sr['name']}({sr['trend']['trend']})" for sr in rising[:5])
-                lines.append(f"- 上升概念({len(rising)}个): {names_str}")
-            if falling:
-                names_str = ', '.join(f"{sr['name']}({sr['trend']['trend']})" for sr in falling[:3])
-                lines.append(f"- 弱势概念({len(falling)}个): {names_str}")
-            if total_c > 0:
-                lines.append(f"- 概念总览: {total_c}个, {len(rising)}个上升, {len(falling)}个弱势")
+            # 大盘趋势
+            for sr in result.get('sector_results', []):
+                if sr['type'] == '大盘':
+                    t = sr['trend']
+                    lines.append(f"- 大盘 **{sr['name']}**: {t['trend']}  "
+                                 f"近5日{t.get('recent_5d_chg', 0):+.1f}%")
 
             # 新闻
             news_info = result.get('news_info', {})

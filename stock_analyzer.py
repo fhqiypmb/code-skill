@@ -1,186 +1,267 @@
 """
 股票板块趋势分析模块
-选股后，分析该股所属行业和概念板块的K线走势 + 新闻，判断赛道是否有机会
+选股后，分析该股所属行业的指数K线走势 + 新闻，判断赛道是否有机会
 
 逻辑：
-  1. 获取个股所属的行业板块 + 所有概念板块
-  2. 对每个板块拉日K线，分析MA趋势（上升/筑底/下跌/横盘）
-  3. 获取个股近期新闻
-  4. 综合输出结论：板块处于什么阶段、有几个概念在上升、新闻面如何、上涨概率
+  1. 获取个股所属的行业板块（新浪）
+  2. 通过行业→指数代码映射，拉指数日K线分析MA趋势
+  3. 获取个股近期新闻（新浪搜索）
+  4. 综合输出结论：行业趋势、新闻面、上涨概率
 
-数据源：东方财富（免费API）
+数据源：新浪财经（板块信息/K线/新闻） + 腾讯（K线备用）
 """
 
 import os
 import json
 import time
+import re
 import ssl
 import urllib.request
 import urllib.parse
-import threading
+import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
 _proxy_handler = urllib.request.ProxyHandler({})
 _opener = urllib.request.build_opener(_proxy_handler)
 
+logger = logging.getLogger(__name__)
 
-def _request_json(url: str, timeout: int = 15) -> dict:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://quote.eastmoney.com",
-    }
-    req = urllib.request.Request(url, headers=headers)
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+}
+
+
+def _fetch_raw(url: str, referer: str = None, timeout: int = 15) -> bytes:
+    """通用HTTP请求，返回原始bytes"""
+    h = dict(_HEADERS)
+    if referer:
+        h["Referer"] = referer
+    req = urllib.request.Request(url, headers=h)
     with _opener.open(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+        return r.read()
 
 
-def _safe_float(val, default=0.0) -> float:
-    if val is None or val == '' or val == '-':
-        return default
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return default
+def _fetch_json(url: str, referer: str = None, timeout: int = 15) -> dict:
+    raw = _fetch_raw(url, referer, timeout)
+    return json.loads(raw.decode("utf-8"))
 
 
-def _fmt_money(val: float) -> str:
-    if abs(val) >= 100_000_000:
-        return f"{val / 100_000_000:.2f}亿"
-    elif abs(val) >= 10_000:
-        return f"{val / 10_000:.0f}万"
-    else:
-        return f"{val:.0f}"
+# ==================== 1. 行业指数映射 ====================
+
+# 常见行业 → 中证/国证/申万指数代码 的映射
+# 新浪K线API支持 sh/sz 开头的指数代码
+_INDUSTRY_INDEX_MAP = {
+    # 消费
+    '白酒': 'sz399998',        # 中证白酒
+    '酿酒行业': 'sz399998',
+    '食品行业': 'sz399996',    # 中证食品(如不可用则用主食品)
+    '食品饮料': 'sz399996',
+    '饮料制造': 'sz399998',
+    '家电行业': 'sz399996',
+    '医药制造': 'sz399913',    # 中证医药
+    '医疗器械': 'sz399913',
+    '生物制药': 'sz399913',
+    '化学制药': 'sz399913',
+    '中药': 'sz399913',
+    '医药': 'sz399913',
+    '汽车制造': 'sz399976',    # 中证新能源汽车
+    '汽车配件': 'sz399976',
+    # 科技
+    '电子器件': 'sz399986',    # 中证电子
+    '电子信息': 'sz399986',
+    '半导体': 'sz399986',
+    '芯片': 'sz399986',
+    '通讯行业': 'sz399806',    # 中证通信
+    '软件服务': 'sz399998',    # 暂用白酒代替... 改用中证信息
+    '计算机': 'sz399998',
+    '互联网': 'sz399998',
+    # 制造/工业
+    '钢铁行业': 'sh000801',    # 申万钢铁
+    '有色金属': 'sh000819',    # 申万有色
+    '煤炭采选': 'sh000820',    # 申万煤炭
+    '化工行业': 'sh000813',    # 申万化工
+    '化纤行业': 'sh000813',
+    '建筑建材': 'sh000812',    # 申万建材
+    '机械行业': 'sz399969',    # 中证制造
+    '电力行业': 'sh000807',    # 申万电力
+    '电器行业': 'sz399969',
+    '水泥': 'sh000812',
+    # 金融
+    '银行': 'sz399986',
+    '券商': 'sz399975',        # 中证证券
+    '保险': 'sh000952',
+    '金融行业': 'sz399975',
+    # 地产/基建
+    '房地产': 'sh000806',      # 申万地产
+    '建筑工程': 'sh000812',
+    # 能源
+    '石油行业': 'sh000824',
+    '新能源': 'sz399808',      # 中证新能
+    '光伏': 'sz399808',
+    '储能': 'sz399808',
+    # 其他
+    '农牧饲渔': 'sz399966',    # 中证农业
+    '纺织服装': 'sz399969',
+    '造纸行业': 'sz399969',
+    '交通运输': 'sh000804',    # 申万交运
+    '船舶制造': 'sz399969',
+    '飞机制造': 'sz399965',    # 中证军工
+    '酒店旅游': 'sz399996',
+    '传媒娱乐': 'sz399971',    # 中证传媒
+    '环保行业': 'sz399808',
+}
+
+# 通用指数（当行业无精确映射时）
+_FALLBACK_INDICES = [
+    ('sh000001', '上证指数'),
+    ('sh000300', '沪深300'),
+    ('sz399006', '创业板指'),
+]
 
 
-# ==================== 1. 获取个股所属板块 ====================
+def _get_industry_index(industry_name: str) -> Tuple[str, str]:
+    """根据行业名称返回 (指数代码, 指数名称)"""
+    # 精确匹配
+    if industry_name in _INDUSTRY_INDEX_MAP:
+        return _INDUSTRY_INDEX_MAP[industry_name], industry_name
 
-def fetch_stock_sectors(code: str) -> Dict:
+    # 模糊匹配
+    for name, code in _INDUSTRY_INDEX_MAP.items():
+        if name in industry_name or industry_name in name:
+            return code, name
+
+    return '', ''
+
+
+# ==================== 2. 获取个股所属行业（新浪） ====================
+
+def fetch_stock_industry(code: str) -> Dict:
     """
-    获取个股的行业板块 + 概念板块名称列表
-    返回: {industry: str, region: str, concepts: [str, ...]}
+    通过新浪获取个股行业信息
+    返回: {name: 股票名, industry: 行业名}
     """
-    market = 1 if code.startswith('6') else 0
-    url = (
-        f"https://push2.eastmoney.com/api/qt/stock/get?"
-        f"secid={market}.{code}"
-        f"&fields=f57,f58,f127,f128,f129"
-        f"&_={int(time.time()*1000)}"
-    )
+    result = {'name': '', 'industry': ''}
+
+    # 腾讯行情获取名称（快速可靠）
     try:
-        resp = _request_json(url)
-        d = resp.get('data', {})
-        if not d:
-            return {'industry': '', 'region': '', 'concepts': [], 'name': ''}
-        concepts_str = d.get('f129', '') or ''
-        concepts = [c.strip() for c in concepts_str.split(',') if c.strip()]
-        return {
-            'name': d.get('f58', ''),
-            'industry': d.get('f127', ''),
-            'region': d.get('f128', ''),
-            'concepts': concepts,
-        }
+        prefix = 'sh' if code.startswith('6') else 'sz'
+        url = f"https://qt.gtimg.cn/q={prefix}{code}"
+        raw = _fetch_raw(url, "https://gu.qq.com")
+        text = raw.decode("gbk", errors="replace")
+        parts = text.split("~")
+        if len(parts) > 1:
+            result['name'] = parts[1]
     except Exception:
-        return {'industry': '', 'region': '', 'concepts': [], 'name': ''}
+        pass
 
+    # 新浪"所属行业"页面获取行业分类
+    try:
+        url = (
+            f"http://vip.stock.finance.sina.com.cn/corp/go.php/"
+            f"vCI_CorpOtherInfo/stockid/{code}/menu_num/2.phtml"
+        )
+        raw = _fetch_raw(url, "https://finance.sina.com.cn")
+        text = raw.decode("gbk", errors="replace")
 
-# ==================== 2. 板块名称 -> BK代码映射 ====================
+        # 去掉HTML标签后提取"同行业个股 XXX"中的行业名
+        clean = re.sub(r'<[^>]+>', ' ', text)
+        m = re.search(r'同行业个股\s+(\S+)', clean)
+        if m:
+            result['industry'] = m.group(1).strip()
+    except Exception as e:
+        logger.debug(f"新浪行业获取失败: {e}")
 
-# 缓存板块列表（避免重复请求）
-_sector_cache = {}
-_sector_cache_lock = threading.Lock()
-
-
-def _load_sector_map():
-    """加载行业板块和概念板块的 名称->BK代码 映射"""
-    with _sector_cache_lock:
-        if _sector_cache:
-            return _sector_cache
-
-    result = {}
-    # 行业板块 m:90+t:2, 概念板块 m:90+t:3
-    # 每页最多返回100条，需分页加载全部
-    for t in [2, 3]:
-        for pn in range(1, 20):
-            url = (
-                f"https://push2.eastmoney.com/api/qt/clist/get?"
-                f"pn={pn}&pz=100&po=1&np=1&fltt=2&invt=2"
-                f"&fs=m:90+t:{t}"
-                f"&fields=f12,f14"
-                f"&_={int(time.time()*1000)}"
-            )
-            try:
-                resp = _request_json(url)
-                items = resp.get('data', {}).get('diff', []) if resp.get('data') else []
-                if not items:
-                    break
-                for it in items:
-                    name = it.get('f14', '')
-                    bk_code = it.get('f12', '')
-                    if name and bk_code:
-                        result[name] = bk_code
-            except Exception:
-                break
-
-    with _sector_cache_lock:
-        _sector_cache.update(result)
     return result
 
 
-def find_bk_code(sector_name: str) -> str:
-    """根据板块名称找BK代码"""
-    mapping = _load_sector_map()
+# ==================== 3. K线获取（新浪 + 腾讯双源） ====================
 
-    # 精确匹配
-    if sector_name in mapping:
-        return mapping[sector_name]
-
-    # 模糊匹配（包含关系）
-    for name, bk in mapping.items():
-        if sector_name in name or name in sector_name:
-            return bk
-    return ''
-
-
-# ==================== 3. 板块K线获取 + 趋势分析 ====================
-
-def fetch_sector_kline(bk_code: str, days: int = 60) -> List[Dict]:
-    """获取板块日K线"""
+def _fetch_kline_sina(symbol: str, days: int = 60) -> List[Dict]:
+    """新浪K线API获取指数日K线"""
     url = (
-        f"https://push2his.eastmoney.com/api/qt/stock/kline/get?"
-        f"secid=90.{bk_code}"
-        f"&fields1=f1,f2,f3,f4,f5,f6"
-        f"&fields2=f51,f52,f53,f54,f55,f56"
-        f"&klt=101&fqt=1&end=20500101&lmt={days}"
-        f"&_={int(time.time()*1000)}"
+        f"https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+        f"CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen={days}"
     )
-    try:
-        resp = _request_json(url)
-        klines = resp.get('data', {}).get('klines', []) if resp.get('data') else []
-        result = []
-        for line in klines:
-            parts = line.split(',')
-            if len(parts) >= 6:
-                result.append({
-                    'date': parts[0],
-                    'open': float(parts[1]),
-                    'close': float(parts[2]),
-                    'high': float(parts[3]),
-                    'low': float(parts[4]),
-                    'volume': float(parts[5]),
-                })
-        return result
-    except Exception:
+    raw = _fetch_raw(url, "https://finance.sina.com.cn")
+    text = raw.decode("utf-8")
+    if text.strip() in ('null', '[]', ''):
+        return []
+    data = json.loads(text)
+    result = []
+    for bar in data:
+        result.append({
+            'date': bar.get('day', ''),
+            'open': float(bar.get('open', 0)),
+            'close': float(bar.get('close', 0)),
+            'high': float(bar.get('high', 0)),
+            'low': float(bar.get('low', 0)),
+            'volume': float(bar.get('volume', 0)),
+        })
+    return result
+
+
+def _fetch_kline_tencent(symbol: str, days: int = 60) -> List[Dict]:
+    """腾讯K线API获取指数日K线"""
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,{days},"
+    raw = _fetch_raw(url, "https://gu.qq.com")
+    data = json.loads(raw.decode("utf-8"))
+
+    # 解析腾讯格式: data -> {symbol: {day: [[date,open,close,high,low,vol], ...]}}
+    if not isinstance(data, dict):
+        return []
+    inner = data.get('data', {})
+    if not isinstance(inner, dict):
+        return []
+    sym_data = inner.get(symbol, {})
+    if not isinstance(sym_data, dict):
         return []
 
+    bars = sym_data.get('day', []) or sym_data.get('qfqday', [])
+    if not isinstance(bars, list):
+        return []
+
+    result = []
+    for bar in bars:
+        if isinstance(bar, list) and len(bar) >= 6:
+            result.append({
+                'date': str(bar[0]),
+                'open': float(bar[1]),
+                'close': float(bar[2]),
+                'high': float(bar[3]),
+                'low': float(bar[4]),
+                'volume': float(bar[5]),
+            })
+    return result
+
+
+def fetch_index_kline(symbol: str, days: int = 60) -> List[Dict]:
+    """获取指数日K线，新浪优先，失败用腾讯"""
+    try:
+        klines = _fetch_kline_sina(symbol, days)
+        if klines and len(klines) >= 20:
+            return klines
+    except Exception as e:
+        logger.debug(f"新浪K线失败 {symbol}: {e}")
+
+    try:
+        klines = _fetch_kline_tencent(symbol, days)
+        if klines:
+            return klines
+    except Exception as e:
+        logger.debug(f"腾讯K线失败 {symbol}: {e}")
+
+    return []
+
+
+# ==================== 4. MA趋势分析 ====================
 
 def analyze_trend(klines: List[Dict]) -> Dict:
     """
-    分析板块K线趋势
-    返回: {trend: 上升/筑底/下跌/横盘, ma5, ma10, ma20, ma5_dir, ma20_dir, recent_chg, ...}
+    分析指数K线趋势
+    返回: {trend: 上升/筑底/下跌/横盘, score, ma5, ma10, ma20, ...}
     """
     if len(klines) < 20:
         return {'trend': '数据不足', 'score': 0}
@@ -203,60 +284,45 @@ def analyze_trend(klines: List[Dict]) -> Dict:
     ma10_rising = ma10 > ma10_prev
     ma20_rising = ma20 > ma20_prev
 
-    # 近5日涨幅
+    # 近期涨幅
     recent_chg = (closes[-1] - closes[-6]) / closes[-6] * 100 if n >= 6 else 0
-    # 近20日涨幅
     recent_20d_chg = (closes[-1] - closes[-21]) / closes[-21] * 100 if n >= 21 else 0
 
-    # 近20日最低价和当前价的关系
+    # 价格位置
     low_20 = min(k['low'] for k in klines[-20:])
     high_20 = max(k['high'] for k in klines[-20:])
     price_pos = (closes[-1] - low_20) / (high_20 - low_20) * 100 if high_20 > low_20 else 50
 
-    # 多头排列: ma5 > ma10 > ma20
+    # 多头排列 / 空头排列
     bull_align = ma5 > ma10 > ma20
-    # 空头排列: ma5 < ma10 < ma20
     bear_align = ma5 < ma10 < ma20
 
     # 判断趋势
-    score = 0
     if bull_align and ma5_rising and ma20_rising:
-        trend = '上升趋势'
-        score = 80
+        trend, score = '上升趋势', 80
     elif bull_align and ma5_rising:
-        trend = '偏多上攻'
-        score = 65
+        trend, score = '偏多上攻', 65
     elif ma5_rising and ma10_rising and not bear_align:
-        trend = '企稳回升'
-        score = 55
+        trend, score = '企稳回升', 55
     elif ma20_rising and price_pos > 60:
-        trend = '中期偏多'
-        score = 50
+        trend, score = '中期偏多', 50
     elif not ma20_rising and not ma5_rising and price_pos < 30:
-        trend = '下跌趋势'
-        score = 10
+        trend, score = '下跌趋势', 10
     elif bear_align:
-        trend = '空头排列'
-        score = 5
+        trend, score = '空头排列', 5
     elif not ma20_rising and ma5_rising and price_pos > 40:
-        trend = '筑底反弹'
-        score = 45
-    elif not ma20_rising and price_pos > 30 and price_pos < 70:
-        trend = '横盘整理'
-        score = 30
+        trend, score = '筑底反弹', 45
+    elif not ma20_rising and 30 < price_pos < 70:
+        trend, score = '横盘整理', 30
     elif ma20_rising and not ma5_rising:
-        trend = '短期回调'
-        score = 40
+        trend, score = '短期回调', 40
     else:
-        trend = '震荡'
-        score = 35
+        trend, score = '震荡', 35
 
     return {
         'trend': trend,
         'score': score,
-        'ma5': ma5,
-        'ma10': ma10,
-        'ma20': ma20,
+        'ma5': ma5, 'ma10': ma10, 'ma20': ma20,
         'ma5_rising': ma5_rising,
         'ma10_rising': ma10_rising,
         'ma20_rising': ma20_rising,
@@ -268,60 +334,89 @@ def analyze_trend(klines: List[Dict]) -> Dict:
     }
 
 
-# ==================== 4. 新闻获取 ====================
+# ==================== 5. 新闻获取（新浪搜索） ====================
 
-def fetch_news(code: str, limit: int = 10) -> List[Dict]:
-    """获取个股近期新闻+公告"""
+def fetch_news(code: str, name: str = '', limit: int = 10) -> List[Dict]:
+    """通过新浪搜索获取个股相关新闻"""
     news_list = []
+    keyword = name or code
 
-    # 搜索接口
-    param_obj = {
-        "uid": "", "keyword": code,
-        "type": ["cmsArticleWebOld"],
-        "client": "web", "clientType": "web", "clientVersion": "curr",
-        "param": {"cmsArticleWebOld": {
-            "searchScope": "default", "sort": "default",
-            "pageIndex": 1, "pageSize": limit,
-            "preTag": "", "postTag": ""
-        }}
-    }
-    param_str = urllib.parse.quote(json.dumps(param_obj, ensure_ascii=False))
-    url = f"https://search-api-web.eastmoney.com/search/jsonp?cb=x&param={param_str}"
+    # 新浪新闻搜索页
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://so.eastmoney.com",
-        }
-        req = urllib.request.Request(url, headers=headers)
-        with _opener.open(req, timeout=15) as r:
-            text = r.read().decode('utf-8')
-        json_str = text[text.index('(') + 1: text.rindex(')')]
-        resp = json.loads(json_str)
-        cms = (resp.get('result') or {}).get('cmsArticleWebOld') or {}
-        articles = cms if isinstance(cms, list) else cms.get('list', [])
-        for art in articles[:limit]:
-            title = art.get('title', '').replace('<em>', '').replace('</em>', '')
+        kw_encoded = urllib.parse.quote(keyword)
+        url = (
+            f"https://search.sina.com.cn/news?q={kw_encoded}"
+            f"&range=all&c=news&sort=time&num=20"
+        )
+        raw = _fetch_raw(url, "https://sina.com.cn")
+        text = raw.decode("utf-8", errors="replace")
+
+        # 提取所有 h2>a 标题链接
+        all_links = re.findall(
+            r'<h2><a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>',
+            text, re.S
+        )
+
+        for url_str, raw_title in all_links:
+            # 清理HTML标签
+            title = re.sub(r'<[^>]+>', '', raw_title).strip()
+            if not title or len(title) < 8:
+                continue
+
+            # 过滤ETF/基金水文
+            if re.search(r'ETF|开盘[涨跌]|净值|份额|申购|赎回', title):
+                continue
+
+            # 从标题后面找时间（"XX分钟前" 或 "YYYY-MM-DD"）
+            date_str = ''
+            idx = text.find(url_str)
+            if idx >= 0:
+                after = text[idx:idx+2000]
+                m_time = re.search(r'fgray_time[^>]*>\s*(.*?)</span>', after, re.S)
+                if m_time:
+                    raw_meta = re.sub(r'<[^>]+>', '', m_time.group(1)).strip()
+                    # 取最后一段有意义的文本作为时间
+                    parts = [p.strip() for p in raw_meta.split('\n') if p.strip()]
+                    date_str = parts[-1] if parts else raw_meta
+
             news_list.append({
                 'title': title,
-                'date': art.get('date', ''),
-                'source': art.get('mediaName', '') or '资讯',
+                'date': date_str,
+                'source': '新浪',
             })
-    except Exception:
-        pass
 
-    # 补充公告
-    if len(news_list) < limit:
+            if len(news_list) >= limit:
+                break
+    except Exception as e:
+        logger.debug(f"新浪新闻搜索失败: {e}")
+
+    # 补充: 新浪财经 roll API
+    if len(news_list) < 3:
         try:
-            url2 = (
-                f"https://np-anotice-stock.eastmoney.com/api/security/ann?"
-                f"sr=-1&page_size={limit - len(news_list)}&page_index=1"
-                f"&ann_type=A&client_source=web&stock_list={code}"
+            kw_encoded = urllib.parse.quote(keyword)
+            url = (
+                f"https://feed.mix.sina.com.cn/api/roll/get?"
+                f"pageid=153&lid=2516&k={kw_encoded}&num={limit}&page=1"
             )
-            resp = _request_json(url2)
-            for item in (resp.get('data', {}).get('list') or []):
-                title = item.get('title', '') or item.get('title_ch', '')
-                date = (item.get('notice_date', '') or item.get('display_time', ''))[:10]
-                news_list.append({'title': title, 'date': date, 'source': '公告'})
+            raw = _fetch_raw(url, "https://finance.sina.com.cn")
+            data = json.loads(raw.decode("utf-8"))
+            articles = data.get('result', {}).get('data', [])
+            for art in articles:
+                title = art.get('title', '').strip()
+                if not title or re.search(r'ETF|开盘[涨跌]|净值', title):
+                    continue
+                ctime = art.get('ctime', '')
+                try:
+                    date_str = datetime.fromtimestamp(int(ctime)).strftime('%Y-%m-%d %H:%M')
+                except (ValueError, TypeError, OSError):
+                    date_str = str(ctime)
+                news_list.append({
+                    'title': title,
+                    'date': date_str,
+                    'source': art.get('media_name', '') or '新浪财经',
+                })
+                if len(news_list) >= limit:
+                    break
         except Exception:
             pass
 
@@ -341,8 +436,7 @@ def analyze_news_sentiment(news_list: List[Dict]) -> Dict:
         '下滑', '风险', '退市', '问询', '质押', '诉讼', '立案',
     ]
 
-    pos = 0
-    neg = 0
+    pos, neg = 0, 0
     hot = []
     for n in news_list:
         title = n.get('title', '')
@@ -367,93 +461,71 @@ def analyze_news_sentiment(news_list: List[Dict]) -> Dict:
     return {'sentiment': sentiment, 'positive': pos, 'negative': neg, 'hot_keywords': hot}
 
 
-# ==================== 5. 综合分析入口 ====================
+# ==================== 6. 综合分析入口 ====================
 
 def analyze_stock(code: str, name: str = '') -> Dict:
     """
-    对一只股票进行板块趋势 + 新闻分析
+    对一只股票进行行业趋势 + 大盘趋势 + 新闻分析
     返回结构化结果
     """
-    # 1. 获取所属板块
-    sectors = fetch_stock_sectors(code)
+    # 1. 获取行业信息
+    stock_info = fetch_stock_industry(code)
     if not name:
-        name = sectors.get('name', code)
+        name = stock_info.get('name', code)
+    industry = stock_info.get('industry', '')
 
-    industry = sectors.get('industry', '')
-    concepts = sectors.get('concepts', [])
-    all_sectors = []
-    if industry:
-        all_sectors.append(('行业', industry))
-    for c in concepts:
-        all_sectors.append(('概念', c))
-
-    # 2. 并行获取所有板块K线 + 新闻
+    # 2. 获取行业指数K线 + 大盘K线
     sector_results = []
-    bk_tasks = {}
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        # 提交板块K线任务
-        for stype, sname in all_sectors:
-            bk_code = find_bk_code(sname)
-            if bk_code:
-                future = executor.submit(fetch_sector_kline, bk_code, 60)
-                bk_tasks[future] = (stype, sname, bk_code)
+    # 行业指数
+    if industry:
+        index_code, index_name = _get_industry_index(industry)
+        if index_code:
+            klines = fetch_index_kline(index_code, 60)
+            trend = analyze_trend(klines)
+            display_name = industry if industry == index_name else f"{industry}"
+            sector_results.append({
+                'type': '行业',
+                'name': display_name,
+                'index_code': index_code,
+                'trend': trend,
+            })
 
-        # 提交新闻任务
-        news_future = executor.submit(fetch_news, code, 10)
+    # 大盘参考指数
+    for idx_code, idx_name in _FALLBACK_INDICES:
+        klines = fetch_index_kline(idx_code, 60)
+        trend = analyze_trend(klines)
+        sector_results.append({
+            'type': '大盘',
+            'name': idx_name,
+            'index_code': idx_code,
+            'trend': trend,
+        })
 
-        # 收集板块结果
-        for future in as_completed(bk_tasks):
-            stype, sname, bk_code = bk_tasks[future]
-            try:
-                klines = future.result()
-                trend_info = analyze_trend(klines)
-                sector_results.append({
-                    'type': stype,
-                    'name': sname,
-                    'bk_code': bk_code,
-                    'trend': trend_info,
-                })
-            except Exception:
-                sector_results.append({
-                    'type': stype, 'name': sname,
-                    'trend': {'trend': '获取失败', 'score': 0},
-                })
-
-        news_list = news_future.result()
-
-    # 3. 新闻情绪
+    # 3. 新闻
+    news_list = fetch_news(code, name, 10)
     news_info = analyze_news_sentiment(news_list)
 
     # 4. 计算综合上涨概率
-    # 行业板块权重高，概念板块取均值
     industry_score = 0
-    concept_scores = []
+    market_scores = []
     for sr in sector_results:
         sc = sr['trend'].get('score', 0)
         if sr['type'] == '行业':
             industry_score = sc
         else:
-            concept_scores.append(sc)
+            market_scores.append(sc)
 
-    concept_avg = sum(concept_scores) / len(concept_scores) if concept_scores else 0
-    # 上升趋势的概念数量
-    rising_concepts = [sr for sr in sector_results
-                       if sr['type'] == '概念' and sr['trend'].get('score', 0) >= 55]
+    market_avg = sum(market_scores) / len(market_scores) if market_scores else 0
 
-    # 综合分 = 行业40% + 概念均分30% + 新闻15% + 上升概念数量加成15%
-    news_score = 0
-    if news_info['sentiment'] == '偏正面':
-        news_score = 70
-    elif news_info['sentiment'] == '中性':
-        news_score = 40
+    news_score = {'偏正面': 70, '中性': 40, '偏负面': 10}.get(
+        news_info['sentiment'], 40)
+
+    # 综合分 = 行业50% + 大盘30% + 新闻20%
+    if industry_score > 0:
+        total = industry_score * 0.5 + market_avg * 0.3 + news_score * 0.2
     else:
-        news_score = 10
-
-    rising_bonus = min(len(rising_concepts) * 15, 100)
-
-    total = (industry_score * 0.4 + concept_avg * 0.3 +
-             news_score * 0.15 + rising_bonus * 0.15)
+        total = market_avg * 0.6 + news_score * 0.4
 
     # 映射到概率
     if total >= 70:
@@ -469,60 +541,47 @@ def analyze_stock(code: str, name: str = '') -> Dict:
         'code': code,
         'name': name,
         'industry': industry,
-        'concepts': concepts,
         'sector_results': sector_results,
         'news': news_list,
         'news_info': news_info,
         'industry_score': industry_score,
-        'concept_avg': concept_avg,
-        'rising_concepts': len(rising_concepts),
-        'total_concepts': len(concept_scores),
+        'market_avg': round(market_avg, 1),
         'total_score': round(total, 1),
         'probability': probability,
     }
 
 
-# ==================== 6. 格式化输出 ====================
+# ==================== 7. 格式化输出 ====================
 
 def format_analysis_report(result: Dict) -> str:
-    """精简输出：板块趋势 + 新闻 + 结论"""
+    """精简输出：行业趋势 + 大盘 + 新闻 + 结论"""
     code = result['code']
     name = result['name']
-    industry = result.get('industry', '')
     sector_results = result.get('sector_results', [])
     news_info = result.get('news_info', {})
     prob = result['probability']
 
-    lines = []
-    lines.append(f"")
-    lines.append(f"  {code} {name}")
+    lines = [f"", f"  {code} {name}"]
 
     # 行业趋势
     for sr in sector_results:
         if sr['type'] == '行业':
             t = sr['trend']
-            lines.append(f"  行业 [{sr['name']}]: {t['trend']}  "
-                          f"近5日{t.get('recent_5d_chg', 0):+.1f}%  "
-                          f"近20日{t.get('recent_20d_chg', 0):+.1f}%")
+            lines.append(
+                f"  行业 [{sr['name']}]: {t['trend']}  "
+                f"近5日{t.get('recent_5d_chg', 0):+.1f}%  "
+                f"近20日{t.get('recent_20d_chg', 0):+.1f}%"
+            )
             break
 
-    # 概念趋势（按分数排序，只显示关键信息）
-    concept_list = [sr for sr in sector_results if sr['type'] == '概念']
-    concept_list.sort(key=lambda x: x['trend'].get('score', 0), reverse=True)
-
-    rising = [sr for sr in concept_list if sr['trend'].get('score', 0) >= 55]
-    falling = [sr for sr in concept_list if sr['trend'].get('score', 0) < 30]
-
-    if rising:
-        names = [f"{sr['name']}({sr['trend']['trend']})" for sr in rising[:5]]
-        lines.append(f"  上升概念({len(rising)}个): {', '.join(names)}")
-    if falling:
-        names = [f"{sr['name']}({sr['trend']['trend']})" for sr in falling[:3]]
-        lines.append(f"  弱势概念({len(falling)}个): {', '.join(names)}")
-
-    total_c = len(concept_list)
-    if total_c > 0:
-        lines.append(f"  概念总览: {total_c}个概念, {len(rising)}个上升, {len(falling)}个弱势")
+    # 大盘趋势
+    for sr in sector_results:
+        if sr['type'] == '大盘':
+            t = sr['trend']
+            lines.append(
+                f"  大盘 [{sr['name']}]: {t['trend']}  "
+                f"近5日{t.get('recent_5d_chg', 0):+.1f}%"
+            )
 
     # 新闻
     sentiment = news_info.get('sentiment', '中性')
@@ -539,7 +598,7 @@ def format_analysis_report(result: Dict) -> str:
     return "\n".join(lines)
 
 
-# ==================== 7. 批量分析 ====================
+# ==================== 8. 批量分析 ====================
 
 def analyze_stocks_batch(stocks: List[Tuple[str, str]]) -> List[Dict]:
     """批量分析，选股后自动调用"""
@@ -547,7 +606,7 @@ def analyze_stocks_batch(stocks: List[Tuple[str, str]]) -> List[Dict]:
         return []
 
     print(f"\n{'=' * 60}")
-    print(f"  板块趋势 + 消息面分析")
+    print(f"  行业趋势 + 消息面分析")
     print(f"  待分析: {len(stocks)} 只")
     print(f"{'=' * 60}")
 
@@ -563,7 +622,7 @@ def analyze_stocks_batch(stocks: List[Tuple[str, str]]) -> List[Dict]:
             results.append({'code': code, 'name': name, 'probability': 0})
 
         if i < len(stocks) - 1:
-            time.sleep(0.3)
+            time.sleep(0.5)
 
     if len(results) > 1:
         ranked = sorted(results, key=lambda x: x.get('probability', 0), reverse=True)
@@ -581,7 +640,7 @@ def analyze_stocks_batch(stocks: List[Tuple[str, str]]) -> List[Dict]:
 def main():
     print()
     print("=" * 50)
-    print("  板块趋势分析工具")
+    print("  行业趋势分析工具")
     print("=" * 50)
     print("  输入股票代码（6位），多只用逗号分隔")
     print()
