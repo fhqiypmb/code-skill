@@ -402,7 +402,7 @@ class SourceRateLimiter:
 
 
 # 全局速率限制器：每个数据源每秒最多2次请求（新浪单源需更保守）
-_rate_limiter = SourceRateLimiter(max_per_sec=16.0)
+_rate_limiter = SourceRateLimiter(max_per_sec=12.0)
 
 
 def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
