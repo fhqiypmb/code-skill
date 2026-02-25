@@ -600,10 +600,16 @@ def format_analysis_report(result: Dict) -> str:
 
 # ==================== 8. 批量分析 ====================
 
-def analyze_stocks_batch(stocks: List[Tuple[str, str]]) -> List[Dict]:
-    """批量分析，选股后自动调用"""
+def analyze_stocks_batch(stocks: List[Tuple[str, str]], signal_types: Dict[str, str] = None) -> List[Dict]:
+    """批量分析，选股后自动调用
+    stocks: [(code, name), ...]
+    signal_types: {code: signal_type} 可选，用于在排名中显示买入类型
+    """
     if not stocks:
         return []
+
+    if signal_types is None:
+        signal_types = {}
 
     print(f"\n{'=' * 60}")
     print(f"  行业趋势 + 消息面分析")
@@ -615,11 +621,12 @@ def analyze_stocks_batch(stocks: List[Tuple[str, str]]) -> List[Dict]:
         print(f"\n  [{i+1}/{len(stocks)}] 分析 {code} {name} ...")
         try:
             r = analyze_stock(code, name)
+            r['signal_type'] = signal_types.get(code, '')
             results.append(r)
             print(format_analysis_report(r))
         except Exception as e:
             print(f"    失败: {e}")
-            results.append({'code': code, 'name': name, 'probability': 0})
+            results.append({'code': code, 'name': name, 'probability': 0, 'signal_type': signal_types.get(code, '')})
 
         if i < len(stocks) - 1:
             time.sleep(0.5)
@@ -629,7 +636,9 @@ def analyze_stocks_batch(stocks: List[Tuple[str, str]]) -> List[Dict]:
         print(f"  {'=' * 40}")
         print(f"  排名:")
         for i, r in enumerate(ranked):
-            print(f"  {i+1}. {r['code']} {r.get('name', ''):<8} 上涨概率 {r.get('probability', 0)}%")
+            st = r.get('signal_type', '')
+            tag = f"[{st}]" if st else ""
+            print(f"  {i+1}. {r['code']} {r.get('name', ''):<8} {tag:<8} 上涨概率 {r.get('probability', 0)}%")
         print()
 
     return results

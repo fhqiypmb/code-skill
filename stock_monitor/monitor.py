@@ -67,7 +67,7 @@ TRADING_START_AFTERNOON = "12:55"
 TRADING_END_AFTERNOON = "15:05"
 
 # 去重窗口（小时）
-DEDUP_HOURS = 24
+DEDUP_HOURS = 2
 
 # 信号结果文件（会被 Actions commit 到仓库）
 SIGNALS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signals')
@@ -220,67 +220,58 @@ def save_signals_to_file(period_name: str, normal_results: list, strict_results:
     logger.info(f"信号已保存到 {filename}")
 
 
+# ==================== 信号类型映射 ====================
+_SIGNAL_TYPE_ICONS = {
+    '严格': '🔴',
+    '筑底': '🟢',
+    '突破': '🔵',
+    '普通': '🟡',
+}
+
+
 # ==================== 单信号即时推送 ====================
 def _format_single_signal(period_name: str, code: str, name: str,
                           signal_type: str, details: dict) -> str:
-    """格式化单只股票的信号消息 + 板块趋势分析"""
-    tag = "🔴 严格买入" if signal_type == 'strict' else "🟡 普通买入"
+    """格式化单只股票的信号消息（精简版）"""
+    icon = _SIGNAL_TYPE_ICONS.get(signal_type, '⚪')
+    tag = f"{icon}{signal_type}买入"
+
+    close = details.get('close', 0)
+    gold_cross = details.get('gold_cross_date', '')
+    confirm = details.get('date', '')
+
     lines = [
-        f"## {tag} | {period_name}",
-        "",
-        f"**{code} {name}**",
-        "",
-        f"| 项目 | 值 |",
-        f"|------|------|",
-        f"| 收盘价 | {details.get('close', 0):.2f} |",
-        f"| 金叉日期 | {details.get('gold_cross_date', '')} |",
-        f"| 放量阳日期 | {details.get('first_double_date', '')} |",
-        f"| 确认阳日期 | {details.get('date', '')} |",
+        f"### {tag} | {period_name}",
+        f"**{code} {name}** ¥{close:.2f}",
+        f"金叉:{gold_cross} 确认:{confirm}",
     ]
 
-    # 板块趋势分析
+    # 板块趋势分析（精简为一行）
     if _HAS_ANALYZER:
         try:
             result = analyze_stock(code, name)
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-            lines.append("### 📈 板块趋势分析")
-            lines.append("")
+            parts = []
 
-            # 行业趋势
+            # 行业
             for sr in result.get('sector_results', []):
                 if sr['type'] == '行业':
                     t = sr['trend']
-                    lines.append(f"- 行业 **{sr['name']}**: {t['trend']}  "
-                                 f"近5日{t.get('recent_5d_chg', 0):+.1f}%  "
-                                 f"近20日{t.get('recent_20d_chg', 0):+.1f}%")
+                    parts.append(f"{sr['name']}:{t['trend']}({t.get('recent_5d_chg', 0):+.1f}%)")
                     break
 
-            # 大盘趋势
-            for sr in result.get('sector_results', []):
-                if sr['type'] == '大盘':
-                    t = sr['trend']
-                    lines.append(f"- 大盘 **{sr['name']}**: {t['trend']}  "
-                                 f"近5日{t.get('recent_5d_chg', 0):+.1f}%")
+            # 消息面
+            sentiment = result.get('news_info', {}).get('sentiment', '中性')
+            parts.append(f"消息面:{sentiment}")
 
-            # 新闻
-            news_info = result.get('news_info', {})
-            sentiment = news_info.get('sentiment', '中性')
-            hot = news_info.get('hot_keywords', [])
-            news_str = f"消息面{sentiment}"
-            if hot:
-                news_str += f"(热点: {','.join(hot)})"
-            lines.append(f"- {news_str}")
-
-            # 结论
+            # 概率
             prob = result.get('probability', 0)
-            lines.append(f"")
-            lines.append(f"**近期上涨概率: {prob}%**")
+            parts.append(f"概率:{prob}%")
+
+            lines.append(" | ".join(parts))
         except Exception as e:
             logger.warning(f"板块分析失败 {code}: {e}")
 
-    return "\n".join(lines)
+    return "\n\n".join(lines)
 
 
 # ==================== 单周期扫描（边扫边推） ====================
@@ -306,8 +297,9 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
     pushed_signals = []  # 收集本轮推送的信号
 
     def on_signal(code, name, signal_type, details):
-        """回调：扫到信号立即去重+推送+保存"""
+        """回调：扫到信号立即去重+推送+保存（普通信号只汇总不单推）"""
         signal_date = details.get('date', '')
+        is_normal = signal_type in ('普通', 'normal')
 
         # 去重
         if not dedup.is_new(period_code, code, signal_date, signal_type):
@@ -317,19 +309,19 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         dedup.mark_sent(period_code, code, signal_date, signal_type)
 
         # 保存到文件
-        if signal_type == 'strict':
-            save_signals_to_file(period_name, [], [(code, name, details)])
-        else:
+        if is_normal:
             save_signals_to_file(period_name, [(code, name, details)], [])
+        else:
+            save_signals_to_file(period_name, [], [(code, name, details)])
 
-        # 立即推送钉钉
-        tag = "严格" if signal_type == 'strict' else "普通"
-        title = f"{tag}买入 | {period_name} | {code} {name}"
-        content = _format_single_signal(period_name, code, name, signal_type, details)
-        send_dingtalk(webhook, secret, title, content)
-        pushed_count[0] += 1
+        # 普通信号不单推，只收集到汇总
+        if not is_normal:
+            title = f"{signal_type}买入 | {period_name} | {code} {name}"
+            content = _format_single_signal(period_name, code, name, signal_type, details)
+            send_dingtalk(webhook, secret, title, content)
+            pushed_count[0] += 1
 
-        # 收集信号用于汇总
+        # 所有信号都收集用于汇总
         pushed_signals.append({
             'period': period_name,
             'code': code,
@@ -367,13 +359,13 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
 
 # ==================== 一轮完整扫描 ====================
 def _format_round_summary(all_signals: list, round_num: int) -> str:
-    """格式化一轮扫描的汇总消息"""
+    """格式化一轮扫描的汇总消息（精简版，无普通信号）"""
     beijing_now = get_beijing_now().strftime('%H:%M')
-    lines = [f"## 📋 第{round_num}轮扫描汇总 ({beijing_now})", ""]
+    lines = [f"### 📋 第{round_num}轮汇总 ({beijing_now})"]
 
     if not all_signals:
-        lines.append("本轮未发现新信号")
-        return "\n".join(lines)
+        lines.append("本轮无新信号")
+        return "\n\n".join(lines)
 
     # 按周期分组
     from collections import OrderedDict
@@ -381,27 +373,18 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
     for sig in all_signals:
         period = sig['period']
         if period not in grouped:
-            grouped[period] = {'strict': [], 'normal': []}
-        grouped[period][sig['signal_type']].append(sig)
+            grouped[period] = []
+        grouped[period].append(sig)
 
     for period, sigs in grouped.items():
-        lines.append(f"### {period}")
-        lines.append("")
-        lines.append("| 类型 | 代码 | 名称 | 收盘价 | 信号日期 |")
-        lines.append("|------|------|------|--------|----------|")
-        for s in sigs['strict']:
+        lines.append(f"**{period}**")
+        for s in sigs:
             d = s['details']
-            lines.append(f"| 🔴严格 | {s['code']} | {s['name']} | {d.get('close', 0):.2f} | {d.get('date', '')} |")
-        for s in sigs['normal']:
-            d = s['details']
-            lines.append(f"| 🟡普通 | {s['code']} | {s['name']} | {d.get('close', 0):.2f} | {d.get('date', '')} |")
-        lines.append("")
+            icon = _SIGNAL_TYPE_ICONS.get(s['signal_type'], '⚪')
+            lines.append(f"{icon}{s['signal_type']} {s['code']} {s['name']} ¥{d.get('close', 0):.2f}")
 
-    strict_total = sum(1 for s in all_signals if s['signal_type'] == 'strict')
-    normal_total = sum(1 for s in all_signals if s['signal_type'] == 'normal')
-    lines.append(f"**合计 {len(all_signals)} 只** (严格 {strict_total} + 普通 {normal_total})")
-
-    return "\n".join(lines)
+    lines.append(f"共{len(all_signals)}条")
+    return "\n\n".join(lines)
 
 
 def run_full_round(stock_list: list, webhook: str, secret: str, dedup: SignalDedup,

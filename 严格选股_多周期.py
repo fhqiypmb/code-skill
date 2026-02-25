@@ -402,7 +402,7 @@ class SourceRateLimiter:
 
 
 # 全局速率限制器：每个数据源每秒最多2次请求（新浪单源需更保守）
-_rate_limiter = SourceRateLimiter(max_per_sec=12.0)
+_rate_limiter = SourceRateLimiter(max_per_sec=13.0)
 
 
 def fetch_kline_with_fallback(code: str, period: str, source_idx: int = 0,
@@ -899,8 +899,128 @@ class StrictStockScreener:
 
         details['ma5_rising'] = ma5_rising
         details['bottom_stable'] = bottom_stable
-        details['signal_type'] = '严格' if strict_buy else ('普通' if normal_buy else '无')
         details['vol_explode'] = vol_explode
+
+        # ===== 筑底信号（v3 对齐金叉.txt）=====
+        bottom_buy = False
+        if (normal_buy or vol_explode) and is_daily_or_above and idx >= 130:
+            # 波谷识别：LOW是前后5根中最低
+            def is_trough(k):
+                if k < 5 or k >= n - 5:
+                    return False
+                low_k = data[k]['low']
+                for off in range(1, 6):
+                    if data[k - off]['low'] < low_k or data[k + off]['low'] < low_k:
+                        return False
+                return True
+
+            # 找右底：idx往前20根内最近的波谷
+            right_idx = -1
+            for j in range(1, 21):
+                if idx - j >= 5 and is_trough(idx - j):
+                    right_idx = idx - j
+                    break
+
+            if right_idx > 0:
+                right_low = data[right_idx]['low']
+                left_start = right_idx - 10
+                # 左底：右底前10-50根内最低点
+                if left_start >= 40:
+                    left_low = min(data[k]['low'] for k in range(left_start - 40, left_start + 1))
+                    # 颈线：两底之间最高价
+                    neck = max(data[k]['high'] for k in range(right_idx, left_start + 1))
+
+                    # W底条件
+                    has_double = right_low > 0 and left_low > 0
+                    bottom_up = right_low * 1000 >= left_low * 970
+                    bottom_not_high = right_low * 1000 <= left_low * 1050
+                    neck_valid = neck * 1000 > max(left_low, right_low) * 1030
+                    break_neck = curr['close'] > neck
+                    # 真底部：右底接近120日最低
+                    low_120 = min(data[k]['low'] for k in range(max(0, idx - 119), idx + 1))
+                    is_real_bottom = right_low * 1000 <= low_120 * 1050
+                    # 未再创低
+                    post_low = min(data[k]['low'] for k in range(right_idx, idx + 1))
+                    no_new_low = post_low >= right_low
+
+                    w_bottom = (has_double and bottom_up and bottom_not_high and
+                                neck_valid and break_neck and is_real_bottom and no_new_low)
+
+                    if w_bottom:
+                        # 量价结构
+                        down_vols = [data[right_idx - i]['volume'] for i in range(5) if right_idx - i >= 0]
+                        down_avg = sum(down_vols) / len(down_vols) if down_vols else 1
+                        up_bars = [data[k]['volume'] for k in range(right_idx + 1, idx)]
+                        up_avg = sum(up_bars) / len(up_bars) if up_bars else 0
+                        vol_60_avg = sum(data[k]['volume'] for k in range(max(0, idx - 59), idx + 1)) / min(60, idx + 1)
+                        vol_struct = (down_avg * 100 < vol_60_avg * 70) and (up_avg * 100 > down_avg * 130)
+
+                        # 均线企稳
+                        ma20_up = curr['ma20'] is not None and data[idx - 3].get('ma20') is not None and curr['ma20'] > data[idx - 3]['ma20']
+                        above_ma30 = curr['ma30'] is not None and curr['close'] > curr['ma30']
+                        ma_stable = ma5_rising and above_ma30 and ma20_up
+
+                        # MACD底背离
+                        closes_arr = [data[k]['close'] for k in range(n)]
+                        def ema_calc(arr, period):
+                            result = [arr[0]]
+                            m = 2.0 / (period + 1)
+                            for i in range(1, len(arr)):
+                                result.append(arr[i] * m + result[-1] * (1 - m))
+                            return result
+                        ema12 = ema_calc(closes_arr, 12)
+                        ema26 = ema_calc(closes_arr, 26)
+                        diff_arr = [ema12[i] - ema26[i] for i in range(n)]
+                        dea_arr = ema_calc(diff_arr, 9)
+                        macd_arr = [2 * (diff_arr[i] - dea_arr[i]) for i in range(n)]
+                        macd_right = macd_arr[right_idx] if right_idx < n else 0
+                        macd_left_min = min(macd_arr[max(0, left_start - 10):left_start + 1]) if left_start >= 0 else 0
+                        macd_diverge = macd_right > macd_left_min
+                        macd_cross = diff_arr[idx] > dea_arr[idx] and any(
+                            diff_arr[k] <= dea_arr[k] for k in range(max(0, idx - 5), idx))
+                        macd_turn_pos = macd_arr[idx] > 0 and idx > 0 and macd_arr[idx - 1] <= 0
+                        macd_ok = macd_diverge or macd_cross or macd_turn_pos
+
+                        # 价格位置+换手率（简化：只用价格位置）
+                        low_250 = min(data[k]['low'] for k in range(max(0, idx - 249), idx + 1))
+                        high_250 = max(data[k]['high'] for k in range(max(0, idx - 249), idx + 1))
+                        pos_pct = (curr['close'] - low_250) * 100 / (high_250 - low_250) if high_250 > low_250 else 50
+                        at_low = pos_pct < 40
+
+                        # 上涨确认
+                        leave_bottom = curr['close'] * 1000 > right_low * 1050
+                        short_up = curr['close'] > data[idx - 5]['close'] if idx >= 5 else False
+                        up_confirm = leave_bottom and short_up
+
+                        # 辅助条件3选2
+                        aux_count = sum([vol_struct, ma_stable, at_low])
+                        bottom_buy = macd_ok and up_confirm and aux_count >= 2
+
+        # ===== 突破信号（对齐金叉.txt）=====
+        breakout_buy = False
+        if (normal_buy or vol_explode) and idx >= 30:
+            # 近30日箱体
+            box_high = max(data[k]['high'] for k in range(max(0, idx - 29), idx + 1))
+            box_low = min(data[k]['low'] for k in range(max(0, idx - 29), idx + 1))
+            narrow_box = (box_high - box_low) * 1000 < box_low * 150
+
+            # 往前找突破发生点
+            for j in range(idx, max(idx - 30, gold_cross_idx), -1):
+                j_high = max(data[k]['high'] for k in range(max(0, j - 29), j + 1))
+                j_low = min(data[k]['low'] for k in range(max(0, j - 29), j + 1))
+                j_narrow = (j_high - j_low) * 1000 < j_low * 150
+                if j_narrow and data[j]['close'] >= j_high:
+                    # 突破发生在金叉前
+                    dist_bp = idx - j
+                    if dist_bp < dist_gold and dist_bp <= 30:
+                        breakout_buy = True
+                        break
+
+        details['bottom_buy'] = bottom_buy
+        details['breakout_buy'] = breakout_buy
+
+        signal_type = '筑底' if bottom_buy else ('突破' if breakout_buy else ('严格' if strict_buy else ('普通' if normal_buy else '无')))
+        details['signal_type'] = signal_type
 
         return normal_buy, strict_buy, details
 
@@ -1086,32 +1206,23 @@ class StrictStockScreener:
                     else:
                         eta_str = ""
 
-                    if strict_signal:
-                        strict_results.append((code, name, details))
+                    if strict_signal or normal_signal:
+                        sig_type = details.get('signal_type', '')
+                        if sig_type in ('筑底', '突破', '严格'):
+                            strict_results.append((code, name, details))
+                        else:
+                            normal_results.append((code, name, details))
                         with _print_lock:
+                            tag = f"[{sig_type}]" if sig_type else ""
                             print(f"\r[{completed}/{total}] {code} {name:<10} "
-                                  f">>> 严格买入信号! <<< "
+                                  f">>> {tag}买入信号 <<< "
                                   f"金叉:{details.get('gold_cross_date','')} "
                                   f"放量阳:{details.get('first_double_date','')} "
                                   f"确认阳:{details.get('date','')} "
                                   f"{eta_str}")
                         if on_signal:
                             try:
-                                on_signal(code, name, 'strict', details)
-                            except Exception:
-                                pass
-                    elif normal_signal:
-                        normal_results.append((code, name, details))
-                        with _print_lock:
-                            print(f"\r[{completed}/{total}] {code} {name:<10} "
-                                  f">>> 普通买入信号 <<< "
-                                  f"金叉:{details.get('gold_cross_date','')} "
-                                  f"放量阳:{details.get('first_double_date','')} "
-                                  f"确认阳:{details.get('date','')} "
-                                  f"{eta_str}")
-                        if on_signal:
-                            try:
-                                on_signal(code, name, 'normal', details)
+                                on_signal(code, name, sig_type or 'normal', details)
                             except Exception:
                                 pass
                     else:
@@ -1136,8 +1247,13 @@ class StrictStockScreener:
         if paused_total > 1:
             time_info += f"  (暂停 {paused_total:.1f}s)"
         print(f"  {time_info}")
-        print(f"  严格买入: {len(strict_results)} 只")
-        print(f"  普通买入: {len(normal_results)} 只")
+        # 按类型统计
+        type_counts = {}
+        for _, _, d in strict_results + normal_results:
+            st = d.get('signal_type', '普通')
+            type_counts[st] = type_counts.get(st, 0) + 1
+        for st, cnt in type_counts.items():
+            print(f"  {st}买入: {cnt} 只")
         if error_count > 0:
             print(f"  请求失败: {error_count} 只")
         throttle_info = get_throttle_summary()
@@ -1198,13 +1314,14 @@ def print_results(title: str, results: List[Tuple[str, str, Dict]], period_name:
     print(f"\n{'=' * 80}")
     print(f"  {title} ({period_name})  共 {len(results_sorted)} 只")
     print(f"{'=' * 80}")
-    print(f"  {'代码':<8} {'名称':<10} {'收盘价':>8} "
+    print(f"  {'代码':<8} {'名称':<10} {'类型':<6} {'收盘价':>8} "
           f"{'金叉日期':<20} {'放量阳日期':<20} {'确认阳日期':<20}")
-    print(f"  {'-' * 90}")
+    print(f"  {'-' * 100}")
 
     for code, name, d in results_sorted:
         vol_tag = " [爆量]" if d.get('vol_explode') else ""
-        print(f"  {code:<8} {name:<10} {d['close']:>8.2f} "
+        sig_type = d.get('signal_type', '普通')
+        print(f"  {code:<8} {name:<10} {sig_type:<6} {d['close']:>8.2f} "
               f"{d.get('gold_cross_date', ''):<20} "
               f"{d.get('first_double_date', ''):<20} "
               f"{d.get('date', ''):<20}{vol_tag}")
@@ -1253,10 +1370,9 @@ def test_single_stock(period: str, period_name: str):
     print(f"  最新K线时间: {last_bar}")
     print(f"  {'-' * 56}")
 
-    if strict_signal:
-        print(f"  >>> 严格买入信号! <<<")
-    elif normal_signal:
-        print(f"  >>> 普通买入信号 <<<")
+    sig_type = details.get('signal_type', '') if details else ''
+    if strict_signal or normal_signal:
+        print(f"  >>> [{sig_type}]买入信号! <<<")
     else:
         print(f"  无买入信号")
 
@@ -1285,19 +1401,12 @@ def test_single_stock(period: str, period_name: str):
     print(f"{'=' * 60}")
 
     # ---- 筛选摘要表格（与批量筛选格式一致）----
-    normal_results = []
-    strict_results = []
-    if strict_signal:
-        strict_results.append((code, stock_name, details))
-    elif normal_signal:
-        normal_results.append((code, stock_name, details))
-
-    print_results("严格买入信号", strict_results, period_name)
-    print_results("普通买入信号", normal_results, period_name)
+    if strict_signal or normal_signal:
+        print_results(f"{sig_type}买入信号", [(code, stock_name, details)], period_name)
 
     # ---- 综合分析（消息面+基本面+资金面）----
     if (strict_signal or normal_signal) and _HAS_ANALYZER:
-        analyze_stocks_batch([(code, stock_name)])
+        analyze_stocks_batch([(code, stock_name)], signal_types={code: sig_type})
 
 
 def main():
@@ -1337,24 +1446,26 @@ def main():
 
         normal_results, strict_results = screener.screen_all_stocks(stock_list)
 
-        print_results("严格买入信号", strict_results, period_name)
-        print_results("普通买入信号", normal_results, period_name)
-
-        if not normal_results and not strict_results:
+        all_results = strict_results + normal_results
+        if not all_results:
             print("\n没有找到符合买入条件的股票")
-
-        if normal_results or strict_results:
+        else:
+            print_results("买入信号汇总", all_results, period_name)
+            # 按类型统计
+            type_counts = {}
+            for _, _, d in all_results:
+                st = d.get('signal_type', '普通')
+                type_counts[st] = type_counts.get(st, 0) + 1
+            parts = [f"{st} {cnt}只" for st, cnt in type_counts.items()]
             print(f"\n{'=' * 80}")
-            print(f"  汇总: 严格 {len(strict_results)} 只 + 普通 {len(normal_results)} 只 "
-                  f"= 共 {len(strict_results) + len(normal_results)} 只")
+            print(f"  汇总: {' + '.join(parts)} = 共 {len(all_results)} 只")
             print(f"{'=' * 80}")
 
             # ---- 综合分析（消息面+基本面+资金面）----
             if _HAS_ANALYZER:
-                # 严格信号优先分析，普通信号排后面
-                all_stocks = [(c, n) for c, n, _ in strict_results] + \
-                             [(c, n) for c, n, _ in normal_results]
-                analyze_stocks_batch(all_stocks)
+                all_stocks = [(c, n) for c, n, _ in all_results]
+                sig_types = {c: d.get('signal_type', '') for c, _, d in all_results}
+                analyze_stocks_batch(all_stocks, signal_types=sig_types)
 
 
 if __name__ == "__main__":
