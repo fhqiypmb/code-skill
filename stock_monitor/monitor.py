@@ -261,7 +261,8 @@ _SIGNAL_TYPE_ICONS = {
 
 # ==================== 单信号即时推送 ====================
 def _format_single_signal(period_name: str, code: str, name: str,
-                          signal_type: str, details: dict) -> str:
+                          signal_type: str, details: dict,
+                          analysis_result: dict = None) -> str:
     """格式化单只股票的信号消息（精简版）"""
     icon = _SIGNAL_TYPE_ICONS.get(signal_type, '⚪')
     tag = f"{icon}{signal_type}买入"
@@ -277,9 +278,15 @@ def _format_single_signal(period_name: str, code: str, name: str,
     ]
 
     # 板块趋势分析（精简为一行）
-    if _HAS_ANALYZER:
+    result = analysis_result
+    if result is None and _HAS_ANALYZER:
         try:
             result = analyze_stock(code, name)
+        except Exception as e:
+            logger.warning(f"板块分析失败 {code}: {e}")
+
+    if result:
+        try:
             parts = []
 
             # 行业
@@ -299,7 +306,7 @@ def _format_single_signal(period_name: str, code: str, name: str,
 
             lines.append(" | ".join(parts))
         except Exception as e:
-            logger.warning(f"板块分析失败 {code}: {e}")
+            logger.warning(f"板块分析格式化失败 {code}: {e}")
 
     return "\n\n".join(lines)
 
@@ -347,10 +354,20 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         else:
             save_signals_to_file(period_name, [], [(code, name, details)])
 
+        # 获取上涨概率（用于汇总和单推展示）
+        probability = 0
+        analysis_result = None
+        if _HAS_ANALYZER:
+            try:
+                analysis_result = analyze_stock(code, name)
+                probability = analysis_result.get('probability', 0)
+            except Exception as e:
+                logger.warning(f"获取概率失败 {code}: {e}")
+
         # 普通信号不单推，只收集到汇总
         if not is_normal:
             title = f"{signal_type}买入 | {period_name} | {code} {name}"
-            content = _format_single_signal(period_name, code, name, signal_type, details)
+            content = _format_single_signal(period_name, code, name, signal_type, details, analysis_result)
             send_dingtalk(webhook, secret, title, content)
             pushed_count[0] += 1
 
@@ -361,6 +378,7 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             'name': name,
             'signal_type': signal_type,
             'details': details,
+            'probability': probability,
         })
 
     normal_results, strict_results = s.screen_all_stocks(stock_list, on_signal=on_signal)
@@ -414,7 +432,9 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
         for s in sigs:
             d = s['details']
             icon = _SIGNAL_TYPE_ICONS.get(s['signal_type'], '⚪')
-            lines.append(f"{icon}{s['signal_type']} {s['code']} {s['name']} ¥{d.get('close', 0):.2f}")
+            prob = s.get('probability', 0)
+            prob_str = f" {prob}%" if prob > 0 else ""
+            lines.append(f"{icon}{s['signal_type']} {s['code']} {s['name']} ¥{d.get('close', 0):.2f}{prob_str}")
 
     lines.append(f"共{len(all_signals)}条")
     return "\n\n".join(lines)
