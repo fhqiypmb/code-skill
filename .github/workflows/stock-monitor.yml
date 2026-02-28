@@ -55,13 +55,13 @@ jobs:
         run: pip install akshare
 
       - name: Update stock list
-        run: python 更新股票列表.py
+        run: python stocks/更新股票列表.py
 
       - name: Commit stock list
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add stock_list.md || true
+          git add stocks/stock_list.md || true
           git diff --staged --quiet || git commit -m "更新股票列表 $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
           git push || true
 
@@ -92,9 +92,9 @@ jobs:
           DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
         run: |
           if [ "${{ github.event.inputs.mode }}" = "now" ]; then
-            exec python -u stock_monitor/monitor.py --now
+            exec python -u stocks/stock_monitor/monitor.py --now
           else
-            exec python -u stock_monitor/monitor.py
+            exec python -u stocks/stock_monitor/monitor.py
           fi
 
       - name: Commit signals
@@ -102,6 +102,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add stock_monitor/signals/ stock_monitor/sent_signals.json stock_list.md || true
+          git add stocks/stock_monitor/signals/ stocks/stock_monitor/sent_signals.json stocks/stock_list.md || true
           git diff --staged --quiet || git commit -m "更新信号数据 $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
           git push || true
