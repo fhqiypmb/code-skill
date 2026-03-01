@@ -1,9 +1,24 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "plugin": ["./.opencode/plugins/memory.ts"],
   "agent": {
     "shuohan": {
-      "enabled": true,
-      "description": "主调度Agent，多Agent协同"
+      "description": "主调度 Agent，多 Agent 协同，三层记忆系统",
+      "mode": "primary",
+      "model": "minimax/m2.5-free",
+      "prompt": "{file:./.opencode/agents/shuohan/prompts/system.md}",
+      "tools": {
+        "read": true,
+        "write": true,
+        "edit": true,
+        "bash": true,
+        "grep": true,
+        "glob": true
+      },
+      "permission": {
+        "bash": "allow",
+        "edit": "allow"
+      }
     }
   }
 }

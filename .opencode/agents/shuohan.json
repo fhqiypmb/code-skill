@@ -1,13 +1,18 @@
 {
-  "name": "硕含",
-  "description": "主调度Agent，多Agent协同，三层记忆系统",
-  "prompt_file": "agent/prompts/system.md",
+  "description": "主调度 Agent，多 Agent 协同，三层记忆系统",
+  "mode": "primary",
   "model": "minimax/m2.5-free",
-  "enabled": true,
-  "tools": ["read", "edit", "write", "grep", "glob", "bash"],
-  "memory": {
-    "hot": "agent/memory/hot.md",
-    "cold": "agent/memory/cold.md",
-    "agent": "agent/memory/agent.md"
+  "prompt": "{file:./shuohan/prompts/system.md}",
+  "tools": {
+    "read": true,
+    "write": true,
+    "edit": true,
+    "bash": true,
+    "grep": true,
+    "glob": true
+  },
+  "permission": {
+    "bash": "ask",
+    "edit": "ask"
   }
 }
