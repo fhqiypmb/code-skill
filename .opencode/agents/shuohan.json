@@ -1,0 +1,13 @@
+{
+  "name": "硕含",
+  "description": "主调度Agent，多Agent协同，三层记忆系统",
+  "prompt_file": "agent/prompts/system.md",
+  "model": "minimax/m2.5-free",
+  "enabled": true,
+  "tools": ["read", "edit", "write", "grep", "glob", "bash"],
+  "memory": {
+    "hot": "agent/memory/hot.md",
+    "cold": "agent/memory/cold.md",
+    "agent": "agent/memory/agent.md"
+  }
+}

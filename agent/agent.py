@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-Sisyphus Agent - Mem0 Style
+硕含 Agent - Mem0 Style
+- hot.md: 会话级记忆（当前会话）
+- cold.md: 用户级记忆（跨会话，LLM提取）
+- agent.md: Agent级记忆（Agent经验）
+"""
+"""
+
+import os
 - hot.md: 会话级记忆（当前会话）
 - cold.md: 用户级记忆（跨会话，LLM提取）
 - agent.md: Agent级记忆（Agent经验）
@@ -217,7 +224,7 @@ Query: {query}
 
 
 # ============ Agent ============
-class Sisyphus:
+class Shuohan:
     def __init__(self, config):
         self.config = config
         self.base_dir = Path(__file__).parent
@@ -247,7 +254,7 @@ class Sisyphus:
         response = llm_response(user_input, self.memory)
 
         # 4. 写入会话记忆
-        self.memory.add_hot("assistant", response, agent="sisyphus")
+        self.memory.add_hot("assistant", response, agent="硕含")
 
         # 5. 提取用户记忆（自动）
         extracted = llm_extract_memory(user_input, response)
@@ -262,10 +269,10 @@ class Sisyphus:
 # ============ Main ============
 def main():
     config = load_config()
-    agent = Sisyphus(config)
+    agent = Shuohan(config)
 
     print("\n" + "=" * 50)
-    print("  Sisyphus Agent")
+    print("  硕含 Agent")
     print("  Hot: hot.md | Cold: cold.md | Agent: agent.md")
     print("  Type 'quit' to exit")
     print("=" * 50 + "\n")
