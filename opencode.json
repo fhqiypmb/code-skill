@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["./.opencode/plugins/memory.ts"],
+  "plugin": ["./.opencode/plugins/memory.js"],
   "agent": {
     "shuohan": {
       "description": "主调度 Agent，多 Agent 协同，三层记忆系统",
