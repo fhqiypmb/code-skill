@@ -1,4 +1,4 @@
-// 硕含记忆系统插件 - v5.0 (兼容性极简版)
+// 硕含记忆系统插件 - v5.1 (生产环境纯净版)
 const { tool } = require("@opencode-ai/plugin");
 const { spawnSync } = require("child_process");
 const path = require("path");
@@ -27,7 +27,6 @@ function runMemoryOps(directory, args) {
 }
 
 module.exports = async function MemoryPlugin(context) {
-  // v5.0 插件逻辑：不再尝试后台拦截，而是专注于提供工具，稳定第一
   return {
     tool: {
       memory_read: tool({
@@ -40,7 +39,7 @@ module.exports = async function MemoryPlugin(context) {
         }
       }),
       memory_write: tool({
-        description: "写入记忆条目 (手动存盘)",
+        description: "写入记忆条目 (手动/自动存盘)",
         args: {
           type: tool.schema.string().enum(["hot", "cold", "agent"]).describe("类型"),
           content: tool.schema.string().describe("内容")
