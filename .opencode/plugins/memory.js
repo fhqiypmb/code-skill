@@ -1,12 +1,20 @@
-import { tool } from "@opencode-ai/plugin";
-import { execSync } from "child_process";
-import path from "path";
+// 硕含记忆系统插件 - CommonJS格式
+const { tool } = require("@opencode-ai/plugin");
+const { execSync } = require("child_process");
+const path = require("path");
 
 // 执行记忆操作脚本
 function runMemoryOps(directory, args) {
   const scriptPath = path.join(directory, ".opencode", "skills", "shuohan", "memory_ops.py");
   try {
-    return execSync(`chcp 65001 > nul && python "${scriptPath}" ${args}`, {
+    // Windows: 使用 chcp 65001 切换到UTF-8
+    // Linux/Mac: 使用空命令
+    const isWindows = process.platform === 'win32';
+    const cmd = isWindows 
+      ? `chcp 65001 > nul && python "${scriptPath}" ${args}`
+      : `python3 "${scriptPath}" ${args}`;
+    
+    return execSync(cmd, {
       encoding: "utf-8",
       cwd: directory,
       timeout: 5000
@@ -17,7 +25,7 @@ function runMemoryOps(directory, args) {
 }
 
 // 导出插件
-export default async function MemoryPlugin(context) {
+module.exports = async function MemoryPlugin(context) {
   return {
     tool: {
       memory_read: tool({
@@ -53,4 +61,4 @@ export default async function MemoryPlugin(context) {
       })
     }
   };
-}
+};
