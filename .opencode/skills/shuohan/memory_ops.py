@@ -1,3 +1,7 @@
+import io
+
+#!/usr/bin/env python3
+
 #!/usr/bin/env python3
 """
 硕含Agent 记忆管理脚本
@@ -27,7 +31,7 @@ def read_memory(mem_type: str):
     """读取记忆"""
     file = get_file(mem_type)
     if file and file.exists():
-        content = file.read_text(encoding="utf-8")
+        content = file.read_text(encoding="utf-8", errors="surrogateescape")
         print(content)
     else:
         print(f"[错误] 记忆文件不存在: {file}")
@@ -48,7 +52,7 @@ def write_memory(mem_type: str, content: str):
             "cold": "# Cold Memory\n\n",
             "agent": "# Agent Memory\n\n"
         }
-        file.write_text(titles[mem_type], encoding="utf-8")
+        file.write_text(titles[mem_type], encoding="utf-8", errors="surrogateescape")
 
     # 格式化时间戳
     if mem_type == "hot":
@@ -59,7 +63,7 @@ def write_memory(mem_type: str, content: str):
     # 追加内容
     entry = f"- **{timestamp}**: {content}\n"
 
-    with open(file, "a", encoding="utf-8") as f:
+    with io.open(file, "a", encoding="utf-8", errors="surrogateescape") as f:
         f.write(entry)
 
     print(f"[成功] 已写入{mem_type}记忆: {content[:50]}...")
@@ -71,7 +75,7 @@ def search_memory(query: str):
     for mem_type in ["hot", "cold", "agent"]:
         file = get_file(mem_type)
         if file and file.exists():
-            content = file.read_text(encoding="utf-8")
+            content = file.read_text(encoding="utf-8", errors="surrogateescape")
             for line in content.split("\n"):
                 if query.lower() in line.lower() and line.strip():
                     results.append(f"[{mem_type}] {line}")

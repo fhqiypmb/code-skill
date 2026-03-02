@@ -6,8 +6,8 @@ import path from "path";
 function runMemoryOps(directory: string, args: string): string {
   const scriptPath = path.join(directory, ".opencode", "skills", "shuohan", "memory_ops.py");
   try {
-    return execSync(`python "${scriptPath}" ${args}`, {
-      encoding: "utf-8",
+    return execSync(`chcp 65001 > nul && python "${scriptPath}" ${args}`, {
+      encoding: "utf-8" as BufferEncoding,
       cwd: directory,
       timeout: 5000
     });
