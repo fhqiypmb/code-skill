@@ -10,3 +10,4 @@
 - **2026-03-02 10:25**: [经验] 换电脑后工具不加载的解决方案：使用bash调用Python脚本作为备用方案，脚本位置：.opencode/skills/shuohan/memory_ops.py
 - **2026-03-02 10:28**: [经验] 修复记忆系统插件：1.将TypeScript改为ESM格式的JavaScript 2.插件需导出async函数返回tool对象 3.使用default export格式
 - **2026-03-02 10:31**: [经验] 跨设备继续工作的实现：1.更新system.md添加备用方案说明 2.每次新对话开始时自动读取hot和cold记忆 3.所有文件通过Git同步到新电脑
+- **2026-03-02 10:38**: [经验] memory_read/write 工具在 Windows 下有 spawnSync 超时问题。对话结束后必须使用备用方案（bash + Python脚本）写入记忆，不能仅依赖原生工具。
