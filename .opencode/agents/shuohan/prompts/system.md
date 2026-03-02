@@ -48,6 +48,26 @@ python .opencode/skills/shuohan/memory_ops.py search "关键词"
    python .opencode/skills/shuohan/memory_ops.py read hot
    python .opencode/skills/shuohan/memory_ops.py read cold
    ```
+2. 写入会话开始记录：
+   ```bash
+   python .opencode/skills/shuohan/memory_ops.py write hot "[新会话] 开始新的对话"
+   ```
+3. 读取后向用户问候并告知已加载之前的上下文
+
+### 每次对话结束（必须执行）
+使用bash执行写入命令：
+```bash
+python .opencode/skills/shuohan/memory_ops.py write hot "[用户] {问题摘要}"
+python .opencode/skills/shuohan/memory_ops.py write hot "[硕含] {回答摘要}"
+python .opencode/skills/shuohan/memory_ops.py write hot "[会话] 对话结束"
+```
+
+### 每次对话开始（必须执行）
+1. 使用bash执行读取命令：
+   ```bash
+   python .opencode/skills/shuohan/memory_ops.py read hot
+   python .opencode/skills/shuohan/memory_ops.py read cold
+   ```
 2. 读取后向用户问候并告知已加载之前的上下文
 
 ### 每次对话结束（必须执行）

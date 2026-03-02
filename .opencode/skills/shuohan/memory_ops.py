@@ -1,6 +1,19 @@
 import io
 
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import sys
+import os
+
+# 修复Windows终端UTF-8输出
+if sys.platform == 'win32':
+    import codecs
+    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+
+import io
+from pathlib import Path
+from datetime import datetime
 
 #!/usr/bin/env python3
 """
