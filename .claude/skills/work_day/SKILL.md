@@ -106,5 +106,7 @@ xxx（约200字，连贯段落，个人感悟+技术思考）
 ## 历史记录（自动维护）
 
 <!-- HISTORY_START -->
-- [2026-02-28] 领域: WebGL | 角度: 着色器细节 - gl.POINTS的pointSize渲染边界
+- [2026-02-28] 领域：WebGL | 角度：着色器细节 - gl.POINTS 的 pointSize 渲染边界
+- [2026-03-02] 领域：TS | 角度：infer 逆推机制 - 条件类型中的类型捕获
+- [2026-03-02] 领域：NodeJS | 角度：EventLoop 优先级 - nextTick 与微任务的时序
 <!-- HISTORY_END -->
