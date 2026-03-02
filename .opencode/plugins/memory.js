@@ -1,4 +1,4 @@
-// 硕含记忆系统插件 - v5.1 (生产环境纯净版)
+// 硕含记忆系统插件 - v5.2 (优化版)
 const { tool } = require("@opencode-ai/plugin");
 const { spawnSync } = require("child_process");
 const path = require("path");
@@ -11,15 +11,19 @@ function runMemoryOps(directory, args) {
     encoding: "utf-8",
     cwd: directory,
     shell: true,
-    timeout: 5000
+    timeout: 5000,
+    env: {
+      ...process.env,
+      PYTHONIOENCODING: "utf-8"
+    }
   };
 
   try {
     const cmd = isWindows
-      ? `chcp 65001 > nul && python "${scriptPath}" ${args}`
+      ? `python "${scriptPath}" ${args}`
       : `python3 "${scriptPath}" ${args}`;
 
-    const result = spawnSync(cmd, options);
+    const result = spawnSync(cmd, [], options);
     return result.stdout ? result.stdout.trim() : "";
   } catch (e) {
     return "";
