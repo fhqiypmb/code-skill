@@ -82,9 +82,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install deps
-        run: |
-          pip install pyyaml
-          pip install akshare || true
+        run: pip install pyyaml
 
       - name: Run monitor
         env:

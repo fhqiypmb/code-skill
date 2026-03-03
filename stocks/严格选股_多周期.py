@@ -34,13 +34,6 @@ import threading
 from typing import Dict, List, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# 导入综合分析模块
-try:
-    from stock_analyzer import analyze_stocks_batch, analyze_stock, format_analysis_report
-    _HAS_ANALYZER = True
-except ImportError:
-    _HAS_ANALYZER = False
-
 # 禁用代理（避免代理软件干扰国内API请求）
 for _key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
     if _key in os.environ:
@@ -1445,9 +1438,6 @@ def test_single_stock(period: str, period_name: str):
     if strict_signal or normal_signal:
         print_results(f"{sig_type}买入信号", [(code, stock_name, details)], period_name)
 
-    # ---- 综合分析（消息面+基本面+资金面）----
-    if (strict_signal or normal_signal) and _HAS_ANALYZER:
-        analyze_stocks_batch([(code, stock_name)], signal_types={code: sig_type})
 
 
 def main():
@@ -1502,11 +1492,6 @@ def main():
             print(f"  汇总: {' + '.join(parts)} = 共 {len(all_results)} 只")
             print(f"{'=' * 80}")
 
-            # ---- 综合分析（消息面+基本面+资金面）----
-            if _HAS_ANALYZER:
-                all_stocks = [(c, n) for c, n, _ in all_results]
-                sig_types = {c: d.get('signal_type', '') for c, _, d in all_results}
-                analyze_stocks_batch(all_stocks, signal_types=sig_types)
 
 
 if __name__ == "__main__":
