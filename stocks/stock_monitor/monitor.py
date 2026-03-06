@@ -53,6 +53,13 @@ spec.loader.exec_module(screener)
 
 from notifier import send_dingtalk, format_signal_message
 
+# 导入概念/板块分析模块
+try:
+    from stock_concept_analyzer import analyze_stock_concept
+    _HAS_CONCEPT_ANALYZER = True
+except ImportError:
+    _HAS_CONCEPT_ANALYZER = False
+
 # ==================== 日志配置 ====================
 logging.basicConfig(
     level=logging.INFO,
@@ -255,7 +262,7 @@ _SIGNAL_TYPE_ICONS = {
 # ==================== 单信号即时推送 ====================
 def _format_single_signal(period_name: str, code: str, name: str,
                           signal_type: str, details: dict) -> str:
-    """格式化单只股票的信号消息（精简版）"""
+    """格式化单只股票的信号消息（包含概念分析）"""
     icon = _SIGNAL_TYPE_ICONS.get(signal_type, '⚪')
     tag = f"{icon}{signal_type}买入"
 
@@ -268,6 +275,30 @@ def _format_single_signal(period_name: str, code: str, name: str,
         f"**{code} {name}** ¥{close:.2f}",
         f"金叉:{gold_cross} 确认:{confirm}",
     ]
+
+    # 获取概念/板块信息
+    if _HAS_CONCEPT_ANALYZER:
+        try:
+            concept_analysis = analyze_stock_concept(code, name, details)
+
+            # 行业
+            if concept_analysis['industry']:
+                ind_chg = concept_analysis['industry_info'].get('change', 0)
+                lines.append(f"**行业**: {concept_analysis['industry']} ({ind_chg:+.2f}%)")
+
+            # 热概念
+            if concept_analysis['hot_concepts']:
+                concepts_str = " / ".join([
+                    f"{c['name']}({c['change']:+.2f}%)"
+                    for c in concept_analysis['hot_concepts'][:3]
+                ])
+                lines.append(f"**热概念**: {concepts_str}")
+
+            # 建议
+            lines.append(f"**评价**: {concept_analysis['recommendation']}")
+
+        except Exception as e:
+            logger.warning(f"概念分析失败 {code}: {e}")
 
     return "\n\n".join(lines)
 
