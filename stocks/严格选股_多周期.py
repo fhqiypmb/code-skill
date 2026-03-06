@@ -34,13 +34,6 @@ import threading
 from typing import Dict, List, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# 导入概念/板块分析模块
-try:
-    from stock_concept_analyzer import analyze_stocks_batch, format_analysis_report
-    _HAS_CONCEPT_ANALYZER = True
-except ImportError:
-    _HAS_CONCEPT_ANALYZER = False
-
 # 禁用代理（避免代理软件干扰国内API请求）
 for _key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
     if _key in os.environ:
@@ -1445,10 +1438,6 @@ def test_single_stock(period: str, period_name: str):
     if strict_signal or normal_signal:
         print_results(f"{sig_type}买入信号", [(code, stock_name, details)], period_name)
 
-    # ---- 概念/板块分析 ----
-    if (strict_signal or normal_signal) and _HAS_CONCEPT_ANALYZER:
-        analyze_stocks_batch([(code, stock_name)], signal_details_map={code: details})
-
 
 
 def main():
@@ -1502,12 +1491,6 @@ def main():
             print(f"\n{'=' * 80}")
             print(f"  汇总: {' + '.join(parts)} = 共 {len(all_results)} 只")
             print(f"{'=' * 80}")
-
-            # ---- 概念/板块分析 ----
-            if _HAS_CONCEPT_ANALYZER:
-                all_stocks = [(c, n) for c, n, _ in all_results]
-                signal_details_map = {c: d for c, _, d in all_results}
-                analyze_stocks_batch(all_stocks, signal_details_map=signal_details_map)
 
 
 
