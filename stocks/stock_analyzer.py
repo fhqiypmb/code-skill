@@ -7,9 +7,12 @@
   4. 实时行情
   5. 上涨概率（多因子打分法）
 
-多因子打分法（2因子，技术面由选股程序覆盖）：
-  因子1 - 新闻情绪（60%）：正面/负面新闻比例 + 热点关键词
-  因子2 - 板块热度（40%）：概念板块数量 + 是否含热门概念
+多因子打分法（5因子，技术面由选股程序覆盖）：
+  因子1 - 新闻情绪（25%）：正面/负面新闻比例 + 热点关键词
+  因子2 - 新闻关注度（15%）：近期新闻数量，关注度高则合力强
+  因子3 - 板块热度（20%）：概念板块数量 + 是否含热门概念
+  因子4 - 行业景气度（20%）：所属行业指数近期涨跌趋势
+  因子5 - 大盘环境（20%）：上证指数近期走势，系统性风险因子
 
 数据源：data_source.py（东方财富为主、新浪备用，自动限流+fallback）
 """
@@ -131,10 +134,117 @@ def _score_concept_heat(concepts: List[str]) -> float:
     return min(score, 100.0)
 
 
-def calc_rise_probability(code: str, signal_type: str, news_info: Dict,
-                          concepts: List[str], quote: Dict) -> Dict:
+def _score_news_attention(news_list: List[Dict]) -> float:
+    """新闻关注度评分（0~100）
+    新闻数量越多说明市场关注度越高，资金容易形成合力。
+    冷门股（几乎无新闻）上涨持续性差。
     """
-    多因子打分法计算上涨概率（不含信号强度因子）
+    count = len(news_list)
+
+    if count == 0:
+        return 20.0   # 无新闻，冷门
+    elif count <= 2:
+        return 35.0
+    elif count <= 4:
+        return 50.0
+    elif count <= 6:
+        return 65.0
+    elif count <= 8:
+        return 80.0
+    else:
+        return 90.0   # 新闻密集，高关注
+
+
+def _score_industry_trend(industry: str) -> float:
+    """行业景气度评分（0~100）
+    通过所属行业指数近期走势判断板块景气度。
+    行业整体上涨时个股跟涨概率更大（板块效应）。
+    """
+    try:
+        index_code, _ = data_source.get_industry_index(industry)
+        if not index_code:
+            return 50.0  # 无对应行业指数，中性
+
+        klines = data_source.fetch_index_kline(index_code, 20)
+        if not klines or len(klines) < 10:
+            return 50.0
+
+        score = 50.0
+
+        # (a) 近5日涨幅
+        closes = [k['close'] for k in klines]
+        chg_5 = (closes[-1] - closes[-6]) / closes[-6] * 100 if len(closes) >= 6 else 0
+        # -3%~+5% 映射到 -15~+25
+        score += max(-15, min(25, chg_5 * 5))
+
+        # (b) 近10日涨幅趋势（正=上行趋势）
+        if len(closes) >= 10:
+            chg_10 = (closes[-1] - closes[-11]) / closes[-11] * 100 if len(closes) >= 11 else 0
+            score += max(-10, min(15, chg_10 * 3))
+
+        # (c) 近5日是否连续上涨（3天以上收阳）
+        if len(klines) >= 5:
+            up_days = sum(1 for k in klines[-5:] if k['close'] > k['open'])
+            if up_days >= 4:
+                score += 10
+            elif up_days >= 3:
+                score += 5
+            elif up_days <= 1:
+                score -= 5
+
+        return max(0, min(100, score))
+
+    except Exception as e:
+        logger.debug(f"行业景气度评分失败 {industry}: {e}")
+        return 50.0
+
+
+def _score_market_env() -> float:
+    """大盘环境评分（0~100）
+    上证指数近期走势，反映系统性风险。
+    牛市环境中个股上涨概率普遍更高，熊市中打折。
+    """
+    try:
+        klines = data_source.fetch_index_kline('000001', 20)
+        if not klines or len(klines) < 10:
+            return 50.0
+
+        score = 50.0
+        closes = [k['close'] for k in klines]
+
+        # (a) 近5日涨幅
+        if len(closes) >= 6:
+            chg_5 = (closes[-1] - closes[-6]) / closes[-6] * 100
+            score += max(-15, min(20, chg_5 * 5))
+
+        # (b) 近10日涨幅
+        if len(closes) >= 11:
+            chg_10 = (closes[-1] - closes[-11]) / closes[-11] * 100
+            score += max(-10, min(15, chg_10 * 3))
+
+        # (c) 近5日阳线占比
+        if len(klines) >= 5:
+            up_days = sum(1 for k in klines[-5:] if k['close'] > k['open'])
+            if up_days >= 4:
+                score += 10
+            elif up_days >= 3:
+                score += 5
+            elif up_days <= 1:
+                score -= 10
+
+        return max(0, min(100, score))
+
+    except Exception as e:
+        logger.debug(f"大盘环境评分失败: {e}")
+        return 50.0
+
+
+def calc_rise_probability(code: str, signal_type: str, news_info: Dict,
+                          concepts: List[str], quote: Dict,
+                          news_list: List[Dict] = None,
+                          industry: str = '') -> Dict:
+    """
+    多因子打分法计算上涨概率（5因子，不含技术面）
 
     参数:
       code: 股票代码
@@ -142,27 +252,41 @@ def calc_rise_probability(code: str, signal_type: str, news_info: Dict,
       news_info: 新闻情绪分析结果
       concepts: 概念板块列表
       quote: 实时行情
+      news_list: 原始新闻列表（用于关注度评分）
+      industry: 所属行业（用于行业景气度评分）
 
     返回:
       {
         'probability': 72.5,           # 综合上涨概率 (0~100)
         'level': '较高',               # 概率等级
         'factors': {                   # 各因子得分明细
-          'news_sentiment': (70, 0.60),
-          'concept_heat': (60, 0.40),
+          'news_sentiment': (70, 0.25),
+          'news_attention': (65, 0.15),
+          'concept_heat': (60, 0.20),
+          'industry_trend': (72, 0.20),
+          'market_env': (68, 0.20),
         }
       }
     """
+    if news_list is None:
+        news_list = []
+
     # 各因子权重
     weights = {
-        'news_sentiment': 0.60,
-        'concept_heat': 0.40,
+        'news_sentiment': 0.25,
+        'news_attention': 0.15,
+        'concept_heat': 0.20,
+        'industry_trend': 0.20,
+        'market_env': 0.20,
     }
 
     # 计算各因子得分
     scores = {
         'news_sentiment': _score_news_sentiment(news_info),
+        'news_attention': _score_news_attention(news_list),
         'concept_heat': _score_concept_heat(concepts),
+        'industry_trend': _score_industry_trend(industry),
+        'market_env': _score_market_env(),
     }
 
     # 加权求和
@@ -218,7 +342,10 @@ def analyze_stock(code: str, name: str = '', signal_type: str = '') -> Dict:
     news_info = analyze_news_sentiment(news_list)
 
     # 5. 上涨概率（多因子打分）
-    rise_prob = calc_rise_probability(code, signal_type, news_info, concepts, quote)
+    rise_prob = calc_rise_probability(
+        code, signal_type, news_info, concepts, quote,
+        news_list=news_list, industry=industry,
+    )
 
     return {
         'code': code,
@@ -300,9 +427,13 @@ def format_analysis_report(result: Dict) -> str:
 
         factor_names = {
             'news_sentiment': '新闻情绪',
+            'news_attention': '新闻关注',
             'concept_heat':   '板块热度',
+            'industry_trend': '行业景气',
+            'market_env':     '大盘环境',
         }
-        for key in ('news_sentiment', 'concept_heat'):
+        for key in ('news_sentiment', 'news_attention', 'concept_heat',
+                     'industry_trend', 'market_env'):
             if key in factors:
                 score, weight = factors[key]
                 bar_len = int(score / 5)  # 0~20格
