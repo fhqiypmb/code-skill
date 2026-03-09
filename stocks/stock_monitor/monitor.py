@@ -52,6 +52,7 @@ screener = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(screener)
 
 from notifier import send_dingtalk, format_signal_message
+import stock_analyzer
 
 # ==================== 日志配置 ====================
 logging.basicConfig(
@@ -252,6 +253,75 @@ _SIGNAL_TYPE_ICONS = {
 }
 
 
+# ==================== 基本面分析辅助 ====================
+def _run_stock_analysis(code: str, name: str, signal_type: str) -> dict:
+    """对单只股票运行基本面分析，失败返回空dict"""
+    try:
+        result = stock_analyzer.analyze_stock(code, name, signal_type=signal_type)
+        logger.info(f"基本面分析完成: {code} {name}")
+        return result
+    except Exception as e:
+        logger.warning(f"基本面分析失败 {code} {name}: {e}")
+        return {}
+
+
+def _format_analysis_for_dingtalk(analysis: dict) -> str:
+    """将基本面分析结果格式化为钉钉Markdown片段"""
+    if not analysis:
+        return ""
+
+    lines = []
+
+    # 行业
+    industry = analysis.get('industry', '')
+    if industry:
+        lines.append(f"**行业**: {industry}")
+
+    # 概念（取前8个）
+    concepts = analysis.get('concepts', [])
+    if concepts:
+        shown = concepts[:8]
+        extra = f" ...共{len(concepts)}个" if len(concepts) > 8 else ""
+        lines.append(f"**概念**: {', '.join(shown)}{extra}")
+
+    # 新闻情绪
+    news_info = analysis.get('news_info', {})
+    if news_info:
+        sentiment = news_info.get('sentiment', '中性')
+        pos = news_info.get('positive', 0)
+        neg = news_info.get('negative', 0)
+        hot = news_info.get('hot_keywords', [])
+        hot_str = f" 热点:{','.join(hot)}" if hot else ""
+        lines.append(f"**新闻**: {sentiment} (正面{pos}/负面{neg}){hot_str}")
+
+    # 上涨概率
+    rise_prob = analysis.get('rise_probability', {})
+    if rise_prob:
+        prob = rise_prob.get('probability', 0)
+        level = rise_prob.get('level', '')
+        lines.append(f"**上涨概率**: {prob}% ({level})")
+
+        # 各因子简要
+        factors = rise_prob.get('factors', {})
+        factor_names = {
+            'news_sentiment': '情绪',
+            'news_attention': '关注',
+            'concept_heat': '板块',
+            'industry_trend': '行业',
+            'market_env': '大盘',
+        }
+        factor_parts = []
+        for key in ('news_sentiment', 'news_attention', 'concept_heat',
+                     'industry_trend', 'market_env'):
+            if key in factors:
+                score, weight = factors[key]
+                factor_parts.append(f"{factor_names[key]}:{score:.0f}")
+        if factor_parts:
+            lines.append(f"**因子**: {' | '.join(factor_parts)}")
+
+    return "\n\n".join(lines)
+
+
 # ==================== 单信号即时推送 ====================
 def _format_single_signal(period_name: str, code: str, name: str,
                           signal_type: str, details: dict) -> str:
@@ -319,17 +389,28 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         if not is_normal:
             title = f"{signal_type}买入 | {period_name} | {code} {name}"
             content = _format_single_signal(period_name, code, name, signal_type, details)
+
+            # 基本面分析并附到推送消息
+            analysis = _run_stock_analysis(code, name, signal_type)
+            analysis_text = _format_analysis_for_dingtalk(analysis)
+            if analysis_text:
+                content += "\n\n---\n\n" + analysis_text
+
             send_dingtalk(webhook, secret, title, content)
             pushed_count[0] += 1
 
         # 所有信号都收集用于汇总
-        pushed_signals.append({
+        sig_entry = {
             'period': period_name,
             'code': code,
             'name': name,
             'signal_type': signal_type,
             'details': details,
-        })
+            # 非普通信号已在上面分析过，普通信号留到汇总时再分析
+            'analysis': analysis if not is_normal else {},
+        }
+
+        pushed_signals.append(sig_entry)
 
     normal_results, strict_results = s.screen_all_stocks(stock_list, on_signal=on_signal)
 
@@ -384,6 +465,23 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             icon = _SIGNAL_TYPE_ICONS.get(s['signal_type'], '⚪')
             lines.append(f"{icon}{s['signal_type']} {s['code']} {s['name']} ¥{d.get('close', 0):.2f}")
 
+            # 附上基本面分析摘要
+            analysis = s.get('analysis', {})
+            rise_prob = analysis.get('rise_probability', {})
+            if rise_prob:
+                prob = rise_prob.get('probability', 0)
+                level = rise_prob.get('level', '')
+                industry = analysis.get('industry', '')
+                news_info = analysis.get('news_info', {})
+                sentiment = news_info.get('sentiment', '')
+                extra_parts = []
+                if industry:
+                    extra_parts.append(industry)
+                if sentiment:
+                    extra_parts.append(f"新闻{sentiment}")
+                extra_str = f" ({', '.join(extra_parts)})" if extra_parts else ""
+                lines.append(f"  ↳ 上涨概率:{prob}%({level}){extra_str}")
+
     lines.append(f"共{len(all_signals)}条")
     return "\n\n".join(lines)
 
@@ -406,6 +504,15 @@ def run_full_round(stock_list: list, webhook: str, secret: str, dedup: SignalDed
         logger.info(f"========== 扫描被终止，已收集 {len(all_signals)} 条信号 ==========")
     else:
         logger.info(f"========== 本轮扫描完成，共 {len(all_signals)} 条新信号 ==========")
+
+    # 汇总前：对普通信号补做基本面分析
+    normal_to_analyze = [s for s in all_signals if s['signal_type'] in ('普通', 'normal') and not s.get('analysis')]
+    if normal_to_analyze and not _shutdown:
+        logger.info(f"对 {len(normal_to_analyze)} 只普通信号进行基本面分析...")
+        for s in normal_to_analyze:
+            if _shutdown:
+                break
+            s['analysis'] = _run_stock_analysis(s['code'], s['name'], s['signal_type'])
 
     # 推送整合汇总消息
     title = f"第{round_num}轮汇总 | 共{len(all_signals)}条信号"

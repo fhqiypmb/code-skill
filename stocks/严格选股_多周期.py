@@ -1438,6 +1438,15 @@ def test_single_stock(period: str, period_name: str):
     if strict_signal or normal_signal:
         print_results(f"{sig_type}买入信号", [(code, stock_name, details)], period_name)
 
+        # ---- 基本面分析 ----
+        try:
+            import stock_analyzer
+            print(f"\n  正在进行基本面分析...")
+            result = stock_analyzer.analyze_stock(code, stock_name, signal_type=sig_type)
+            print(stock_analyzer.format_analysis_report(result))
+        except Exception as e:
+            print(f"\n  基本面分析失败: {e}")
+
 
 
 def main():
@@ -1491,6 +1500,15 @@ def main():
             print(f"\n{'=' * 80}")
             print(f"  汇总: {' + '.join(parts)} = 共 {len(all_results)} 只")
             print(f"{'=' * 80}")
+
+            # ---- 基本面分析 ----
+            try:
+                import stock_analyzer
+                signal_types = {code: d.get('signal_type', '') for code, name, d in all_results}
+                stocks_to_analyze = [(code, name) for code, name, d in all_results]
+                stock_analyzer.analyze_stocks_batch(stocks_to_analyze, signal_types=signal_types)
+            except Exception as e:
+                print(f"\n  基本面分析失败: {e}")
 
 
 
