@@ -80,7 +80,7 @@ def _format_colored_probability(probability: float) -> str:
         if probability >= threshold:
             level = level_name
             break
-    return f'<font color="{color}">{probability}% ({level})</font>"
+    return f'<font color="{color}">{probability}% ({level})</font>'
 
 import stock_analyzer
 
