@@ -53,18 +53,34 @@ spec.loader.exec_module(screener)
 
 from notifier import send_dingtalk, format_signal_message
 
-def _get_probability_emoji(probability: float) -> str:
-    """根据概率返回 emoji 标识"""
+def _get_probability_color(probability: float) -> str:
+    """根据概率返回 HTML 颜色代码"""
     if probability >= 80:
-        return "🔴"  # 很高
+        return "#FF0000"  # 红色 - 很高
     elif probability >= 65:
-        return "🟠"  # 较高
+        return "#FF6600"  # 橙色 - 较高
     elif probability >= 50:
-        return "🟡"  # 中等
+        return "#FFAA00"  # 黄色 - 中等
     elif probability >= 35:
-        return "🔵"  # 较低
+        return "#0066FF"  # 蓝色 - 较低
     else:
-        return "🟢"  # 低
+        return "#00AA00"  # 绿色 - 低
+
+def _format_colored_probability(probability: float) -> str:
+    """格式化带颜色的上涨概率"""
+    color = _get_probability_color(probability)
+    level_map = {
+        80: "很高",
+        65: "较高",
+        50: "中等",
+        35: "较低",
+    }
+    level = "低"
+    for threshold, level_name in level_map.items():
+        if probability >= threshold:
+            level = level_name
+            break
+    return f'<font color="{color}">{probability}% ({level})</font>"
 
 import stock_analyzer
 
@@ -313,8 +329,8 @@ def _format_analysis_for_dingtalk(analysis: dict) -> str:
     if rise_prob:
         prob = rise_prob.get('probability', 0)
         level = rise_prob.get('level', '')
-        emoji = _get_probability_emoji(prob)
-        lines.append(f"**上涨概率**: {emoji} {prob}% ({level})")
+        colored_prob = _format_colored_probability(prob)
+        lines.append(f"**上涨概率**: {colored_prob}")
 
         # 各因子简要
         factors = rise_prob.get('factors', {})
@@ -496,8 +512,8 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
                 if sentiment:
                     extra_parts.append(f"新闻{sentiment}")
                 extra_str = f" ({', '.join(extra_parts)})" if extra_parts else ""
-                emoji = _get_probability_emoji(prob)
-                lines.append(f"  ↳ 上涨概率:{emoji} {prob}%({level}){extra_str}")
+                colored_prob = _format_colored_probability(prob)
+                lines.append(f"  ↳ 上涨概率:{colored_prob}{extra_str}")
 
     lines.append(f"共{len(all_signals)}条")
     return "\n\n".join(lines)
