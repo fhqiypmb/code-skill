@@ -239,10 +239,50 @@ def _score_market_env() -> float:
         return 50.0
 
 
+
+def _score_zhuli_intent(code: str, klines, news_list, concepts, industry, quote) -> float:
+    """因子 6：主力意图评分（0~100）- 主力思维模拟分析"""
+    if not klines or len(klines) < 30:
+        return 50.0
+    closes = [float(k['close']) for k in klines[-30:]]
+    volumes = [float(k['volume']) for k in klines[-30:]]
+    ma5 = sum(closes[-5:]) / 5 if len(closes) >= 5 else 0
+    ma10 = sum(closes[-10:]) / 10 if len(closes) >= 10 else 0
+    avg_vol_5 = sum(volumes[-5:]) / 5 if len(volumes) >= 5 else 1
+    vol_ratio = volumes[-1] / avg_vol_5 if avg_vol_5 > 0 else 1
+    chg_10 = (closes[-1] - closes[-11]) / closes[-11] * 100 if len(closes) >= 11 else 0
+    min_p, max_p = min(closes), max(closes)
+    price_pos = (closes[-1] - min_p) / (max_p - min_p) * 100 if max_p > min_p else 50
+    pos_news = sum(1 for n in news_list if any(kw in n.get('title', '') for kw in ['增长', '突破', '利好', '中标', '签约', '新高']))
+    neg_news = sum(1 for n in news_list if any(kw in n.get('title', '') for kw in ['下跌', '利空', '减持', '违规', '亏损']))
+    score = 50
+    if price_pos < 20: score += 25
+    elif price_pos < 40: score += 10
+    elif price_pos > 80: score -= 35
+    elif price_pos > 70: score -= 15
+    if vol_ratio > 3 and price_pos > 70: score -= 25
+    elif vol_ratio > 2.5: score -= 15
+    elif vol_ratio > 1.5: score += 15 if price_pos < 50 else 5
+    elif vol_ratio < 0.5: score -= 10
+    if chg_10 > 30: score -= 25
+    elif chg_10 > 20: score -= 15
+    elif chg_10 > 10: score -= 5
+    elif chg_10 < -20: score += 10
+    elif chg_10 < -5: score += 5
+    if pos_news > neg_news + 3: score += 15
+    elif neg_news > pos_news + 1: score -= 10
+    hot = ['AI', '芯片', '机器人', '新能源', '华为', '半导体', '低空经济', '储能']
+    hot_hits = [c for c in concepts if any(h in c for h in hot)]
+    if len(hot_hits) >= 2: score += 15
+    elif len(concepts) >= 6: score += 5
+    return float(max(0, min(100, score)))
+
+
 def calc_rise_probability(code: str, signal_type: str, news_info: Dict,
                           concepts: List[str], quote: Dict,
                           news_list: List[Dict] = None,
-                          industry: str = '') -> Dict:
+                          industry: str = '',
+                          klines = None) -> Dict:
     """
     多因子打分法计算上涨概率（5因子，不含技术面）
 
@@ -273,11 +313,12 @@ def calc_rise_probability(code: str, signal_type: str, news_info: Dict,
 
     # 各因子权重
     weights = {
-        'news_sentiment': 0.25,
-        'news_attention': 0.15,
-        'concept_heat': 0.20,
-        'industry_trend': 0.20,
-        'market_env': 0.20,
+        'news_sentiment': 0.20,
+        'news_attention': 0.12,
+        'concept_heat': 0.16,
+        'industry_trend': 0.16,
+        'market_env': 0.16,
+        'zhuli_intent': 0.20,
     }
 
     # 计算各因子得分
@@ -287,6 +328,7 @@ def calc_rise_probability(code: str, signal_type: str, news_info: Dict,
         'concept_heat': _score_concept_heat(concepts),
         'industry_trend': _score_industry_trend(industry),
         'market_env': _score_market_env(),
+        'zhuli_intent': _score_zhuli_intent(code, klines, news_list, concepts, industry, quote),
     }
 
     # 加权求和
@@ -341,10 +383,13 @@ def analyze_stock(code: str, name: str = '', signal_type: str = '') -> Dict:
     news_list = data_source.fetch_stock_news(code, 10)
     news_info = analyze_news_sentiment(news_list)
 
-    # 5. 上涨概率（多因子打分）
+    # 5. K 线数据（主力分析需要）
+    klines = data_source.fetch_kline(code, '240min', 60)
+    
+    # 6. 上涨概率（多因子打分，含主力意图）
     rise_prob = calc_rise_probability(
         code, signal_type, news_info, concepts, quote,
-        news_list=news_list, industry=industry,
+        news_list=news_list, industry=industry, klines=klines,
     )
 
     return {
@@ -360,6 +405,20 @@ def analyze_stock(code: str, name: str = '', signal_type: str = '') -> Dict:
 
 
 # ==================== 3. 格式化输出 ====================
+
+
+def _get_probability_indicator(probability: float) -> str:
+    """根据概率返回带 emoji 的标识"""
+    if probability >= 80:
+        return f"🔴 {probability}% (很高)"  # 红色圆
+    elif probability >= 65:
+        return f"🟠 {probability}% (较高)"  # 橙色圆
+    elif probability >= 50:
+        return f"🟡 {probability}% (中等)"  # 黄色圆
+    elif probability >= 35:
+        return f"🔵 {probability}% (较低)"  # 蓝色圆
+    else:
+        return f"🟢 {probability}% (低)"  # 绿色圆
 
 def format_analysis_report(result: Dict) -> str:
     code = result['code']
@@ -422,7 +481,9 @@ def format_analysis_report(result: Dict) -> str:
         factors = rise_prob.get('factors', {})
 
         lines.append(f"")
-        lines.append(f"  【上涨概率】{prob}%  ({level})")
+        lines.append(f"")
+        prob_text = _get_probability_indicator(prob)
+        lines.append(f"  【上涨概率】 {prob_text}")
         lines.append(f"  {'-' * 50}")
 
         factor_names = {
@@ -431,9 +492,10 @@ def format_analysis_report(result: Dict) -> str:
             'concept_heat':   '板块热度',
             'industry_trend': '行业景气',
             'market_env':     '大盘环境',
+            'zhuli_intent':   '主力意图',
         }
         for key in ('news_sentiment', 'news_attention', 'concept_heat',
-                     'industry_trend', 'market_env'):
+                     'industry_trend', 'market_env', 'zhuli_intent'):
             if key in factors:
                 score, weight = factors[key]
                 bar_len = int(score / 5)  # 0~20格
