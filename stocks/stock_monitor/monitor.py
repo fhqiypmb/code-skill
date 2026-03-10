@@ -52,6 +52,20 @@ screener = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(screener)
 
 from notifier import send_dingtalk, format_signal_message
+
+def _get_probability_emoji(probability: float) -> str:
+    """根据概率返回 emoji 标识"""
+    if probability >= 80:
+        return "🔴"  # 很高
+    elif probability >= 65:
+        return "🟠"  # 较高
+    elif probability >= 50:
+        return "🟡"  # 中等
+    elif probability >= 35:
+        return "🔵"  # 较低
+    else:
+        return "🟢"  # 低
+
 import stock_analyzer
 
 # ==================== 日志配置 ====================
@@ -299,7 +313,8 @@ def _format_analysis_for_dingtalk(analysis: dict) -> str:
     if rise_prob:
         prob = rise_prob.get('probability', 0)
         level = rise_prob.get('level', '')
-        lines.append(f"**上涨概率**: {prob}% ({level})")
+        emoji = _get_probability_emoji(prob)
+        lines.append(f"**上涨概率**: {emoji} {prob}% ({level})")
 
         # 各因子简要
         factors = rise_prob.get('factors', {})
@@ -309,10 +324,11 @@ def _format_analysis_for_dingtalk(analysis: dict) -> str:
             'concept_heat': '板块',
             'industry_trend': '行业',
             'market_env': '大盘',
+            'zhuli_intent': '主力',
         }
         factor_parts = []
         for key in ('news_sentiment', 'news_attention', 'concept_heat',
-                     'industry_trend', 'market_env'):
+                     'industry_trend', 'market_env', 'zhuli_intent'):
             if key in factors:
                 score, weight = factors[key]
                 factor_parts.append(f"{factor_names[key]}:{score:.0f}")
