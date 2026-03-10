@@ -136,23 +136,88 @@ def _score_concept_heat(concepts: List[str]) -> float:
 
 def _score_news_attention(news_list: List[Dict]) -> float:
     """新闻关注度评分（0~100）
-    新闻数量越多说明市场关注度越高，资金容易形成合力。
-    冷门股（几乎无新闻）上涨持续性差。
+    
+    核心逻辑：不只看条数，而是考虑
+    1. 媒体权威性 - 权威媒体权重更高
+    2. 时效性 - 24h 内新闻权重 > 3 天内 > 7 天内
+    3. 去重 - 同一新闻多渠道转载只算一次
+    
+    加权得分 = Σ(单条新闻权重 × 基础分)
     """
-    count = len(news_list)
-
-    if count == 0:
-        return 20.0   # 无新闻，冷门
-    elif count <= 2:
-        return 35.0
-    elif count <= 4:
+    if not news_list:
+        return 20.0
+    
+    # 权威媒体列表（财联社、证券时报等）
+    AUTH_MEDIA = [
+        '财联社', '证券时报', '上海证券报', '中国证券报',
+        '证券日报', '央视财经', '第一财经', '界面新闻',
+        '澎湃新闻', '每经', '经济观察', ' Wind', '同花顺',
+        '东方财富', '新浪财经', '腾讯证券', '网易财经',
+    ]
+    
+    # 自媒体/不确定来源
+    AUTO_MEDIA = ['搜狐', '今日头条', '百度', '微信', '微博', '自媒体']
+    
+    now = time.time()
+    weighted_count = 0.0
+    seen_titles = set()  # 去重
+    
+    for news in news_list:
+        title = news.get('title', '')
+        source = news.get('source', '')
+        date_str = news.get('date', '')
+        
+        # (1) 标题去重 - 相同标题只算一次
+        title_hash = title[:30]  # 取前 30 字作为标识
+        if title_hash in seen_titles:
+            continue
+        seen_titles.add(title_hash)
+        
+        # (2) 媒体权威性权重
+        if any(m in source for m in AUTH_MEDIA):
+            media_weight = 1.0  # 权威媒体
+        elif any(m in source for m in AUTO_MEDIA):
+            media_weight = 0.3  # 自媒体/转载
+        else:
+            media_weight = 0.6  # 未知来源
+        
+        # (3) 时效性权重
+        try:
+            # 解析日期格式 "2024-01-15 10:30" 或 "2024-01-15"
+            if ' ' in date_str:
+                dt = time.strptime(date_str, '%Y-%m-%d %H:%M')
+            else:
+                dt = time.strptime(date_str, '%Y-%m-%d')
+            hours_ago = (now - time.mktime(dt)) / 3600
+        except:
+            hours_ago = 48  # 无法解析按 48 小时前算
+        
+        if hours_ago <= 24:
+            time_weight = 1.0  # 24 小时内
+        elif hours_ago <= 72:
+            time_weight = 0.6  # 3 天内
+        elif hours_ago <= 168:
+            time_weight = 0.3  # 7 天内
+        else:
+            time_weight = 0.1  # 超过 7 天
+        
+        # 单条新闻贡献 = 基础分 × 媒体权重 × 时效权重
+        weighted_count += media_weight * time_weight
+    
+    # 映射到分数区间
+    # 加权后 0 条=20 分，10+=90 分
+    if weighted_count <= 0:
+        return 20.0
+    elif weighted_count <= 1:
+        return 30.0
+    elif weighted_count <= 3:
         return 50.0
-    elif count <= 6:
+    elif weighted_count <= 5:
         return 65.0
-    elif count <= 8:
+    elif weighted_count <= 8:
         return 80.0
     else:
-        return 90.0   # 新闻密集，高关注
+        return min(90.0, 80 + weighted_count * 2)
 
 
 def _score_industry_trend(industry: str) -> float:
@@ -337,8 +402,10 @@ def analyze_stock(code: str, name: str = '', signal_type: str = '') -> Dict:
     # 3. 概念板块
     concepts = data_source.fetch_stock_concepts(code)
 
-    # 4. 个股新闻
+    # 4. 个股新闻（现在看质量不是数量，10 条足够）
     news_list = data_source.fetch_stock_news(code, 10)
+    # 4. 个股新闻（增加数量以便更好评估关注度）
+    news_list = data_source.fetch_stock_news(code, 30)
     news_info = analyze_news_sentiment(news_list)
 
     # 5. 上涨概率（多因子打分）

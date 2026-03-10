@@ -2,11 +2,11 @@ name: 股票信号监控
 
 on:
   # 定时任务：
-  # - 每个交易日 08:00 北京时间 (UTC 00:00) 启动监控（提前排队应对GitHub延迟，monitor.py内部等到09:25开盘）
+  # - 每个交易日 09:30 北京时间 (UTC 01:30) 启动监控（提前排队应对GitHub延迟，monitor.py内部等到09:25开盘）
   # - 每周一 07:00 北京时间 (UTC 周日 23:00) 更新股票列表
   # - 每个工作日 08:30 北京时间 (UTC 00:30) 更新股票列表
   schedule:
-    - cron: '0 0 * * 1-5'    # 监控：工作日 08:00 北京时间（提前排队，monitor.py 内部会等到09:25开盘）
+    - cron: '30 1 * * 1-5'    # 监控：工作日 09:30 北京时间（提前排队，monitor.py 内部会等到09:25开盘）
     - cron: '0 23 * * 0'      # 更新列表：周一 07:00 北京时间（周日UTC23点=周一北京07点）
     - cron: '30 0 * * 1-5'    # 更新列表：工作日 08:30 北京时间
 
@@ -72,7 +72,7 @@ jobs:
     # needs + !cancelled() 确保：定时触发时等 update-stock-list 完成（无论成功/跳过），手动触发时 update-stock-list 被跳过也能运行
     if: |
       !cancelled() &&
-      (github.event.schedule == '0 0 * * 1-5' || github.event.inputs.mode == 'loop' || github.event.inputs.mode == 'now')
+      (github.event.schedule == '30 1 * * 1-5' || github.event.inputs.mode == 'loop' || github.event.inputs.mode == 'now')
     timeout-minutes: 360
 
     steps:
