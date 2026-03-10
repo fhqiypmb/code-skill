@@ -496,7 +496,8 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
                 if sentiment:
                     extra_parts.append(f"新闻{sentiment}")
                 extra_str = f" ({', '.join(extra_parts)})" if extra_parts else ""
-                lines.append(f"  ↳ 上涨概率:{prob}%({level}){extra_str}")
+                emoji = _get_probability_emoji(prob)
+                lines.append(f"  ↳ 上涨概率:{emoji} {prob}%({level}){extra_str}")
 
     lines.append(f"共{len(all_signals)}条")
     return "\n\n".join(lines)
