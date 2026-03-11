@@ -13,6 +13,19 @@
   - 行业板块分类
   - 概念板块分类
   - 个股新闻
+  - 实时行情
+  - 指数K线
+  - 主力资金流向（用于主力意图因子）
+
+字段说明（东方财富 push2 API）：
+  f137 = 今日主力净流入（元，已是净值）
+  f138 = 超大单流入（元）
+  f139 = 超大单流出（元）
+  f140 = 超大单净流入（元，已是净值）
+  f141 = 大单流入（元）
+  f142 = 大单流出（元）
+  f143 = 大单净流入（元，已是净值）
+  f62  = 主力净流入强度（‱，除以10000再×100得百分比）
 
 所有接口均为东方财富/新浪公开HTTP API，无需API Key。
 """
@@ -27,7 +40,7 @@ import threading
 import urllib.request
 import urllib.parse
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TypedDict
 
 # 禁用代理
 for _key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
@@ -40,6 +53,66 @@ _proxy_handler = urllib.request.ProxyHandler({})
 _opener = urllib.request.build_opener(_proxy_handler)
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== TypedDict 类型定义 ====================
+
+class KLineBar(TypedDict):
+    day: str
+    open: str
+    high: str
+    low: str
+    close: str
+    volume: str
+
+
+class IndexBar(TypedDict):
+    date: str
+    open: float
+    close: float
+    high: float
+    low: float
+    volume: float
+
+
+class NewsItem(TypedDict):
+    title: str
+    date: str
+    source: str
+    url: str
+
+
+class QuoteInfo(TypedDict):
+    name: str
+    price: float
+    change_pct: float
+    high: float
+    low: float
+    open: float
+    pre_close: float
+    volume: int
+    amount: int
+    turnover_rate: float   # 换手率（%），f168 / 100
+
+
+class CapitalFlow(TypedDict):
+    main_net_in: float    # 主力净流入（万元）
+    super_net_in: float   # 超大单净流入（万元）
+    big_net_in: float     # 大单净流入（万元）
+    flow_ratio: float     # 主力净流入强度（%）
+
+
+class StockIndustry(TypedDict):
+    name: str
+    industry: str
+    board_code: str
+
+
+class BoardInfo(TypedDict):
+    board_code: str
+    board_name: str
+    stocks: List[str]
+
 
 # ==================== 通用请求工具 ====================
 
@@ -55,9 +128,10 @@ def _random_ua() -> str:
     return random.choice(_USER_AGENTS)
 
 
-def _http_get(url: str, headers: dict = None, timeout: int = 15, retry: int = 2) -> bytes:
+def _http_get(url: str, headers: Optional[Dict[str, str]] = None,
+              timeout: int = 15, retry: int = 2) -> bytes:
     """通用HTTP GET，带重试和随机UA"""
-    h = {
+    h: Dict[str, str] = {
         "User-Agent": _random_ua(),
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -66,7 +140,7 @@ def _http_get(url: str, headers: dict = None, timeout: int = 15, retry: int = 2)
     if headers:
         h.update(headers)
 
-    last_err = None
+    last_err: Exception = RuntimeError("未知错误")
     for attempt in range(retry + 1):
         try:
             req = urllib.request.Request(url, headers=h)
@@ -75,7 +149,6 @@ def _http_get(url: str, headers: dict = None, timeout: int = 15, retry: int = 2)
         except Exception as e:
             last_err = e
             err_str = str(e)
-            # 限流/拒绝 → 等更久再重试
             if any(code in err_str for code in ('456', '403', '429', '503')):
                 wait = (attempt + 1) * 2 + random.uniform(0.5, 1.5)
                 time.sleep(wait)
@@ -84,7 +157,8 @@ def _http_get(url: str, headers: dict = None, timeout: int = 15, retry: int = 2)
     raise last_err
 
 
-def _http_get_json(url: str, headers: dict = None, timeout: int = 15, retry: int = 2) -> dict:
+def _http_get_json(url: str, headers: Optional[Dict[str, str]] = None,
+                   timeout: int = 15, retry: int = 2) -> dict:
     """HTTP GET 返回JSON"""
     raw = _http_get(url, headers, timeout, retry)
     return json.loads(raw.decode("utf-8"))
@@ -95,13 +169,13 @@ def _http_get_json(url: str, headers: dict = None, timeout: int = 15, retry: int
 class RateLimiter:
     """令牌桶限流器，支持自适应退避"""
 
-    def __init__(self, max_per_sec: float = 8.0):
+    def __init__(self, max_per_sec: float = 8.0) -> None:
         self._interval = 1.0 / max_per_sec
         self._lock = threading.Lock()
         self._last_time = 0.0
         self._backoff = 0.0
 
-    def wait(self):
+    def wait(self) -> None:
         """请求前调用，阻塞到满足速率"""
         with self._lock:
             now = time.time()
@@ -109,22 +183,21 @@ class RateLimiter:
             elapsed = now - self._last_time
             if elapsed < wait_time:
                 time.sleep(wait_time - elapsed)
-            # 加一点随机抖动，避免多线程同步请求
             time.sleep(random.uniform(0.01, 0.05))
             self._last_time = time.time()
 
-    def report_throttled(self):
+    def report_throttled(self) -> None:
         """被限流时调用，增加退避"""
         with self._lock:
             self._backoff = min(max(self._backoff * 2, 1.0), 8.0)
 
-    def report_success(self):
+    def report_success(self) -> None:
         """成功时调用，减少退避"""
         with self._lock:
             if self._backoff > 0:
                 self._backoff = max(self._backoff * 0.5, 0)
                 if self._backoff < 0.05:
-                    self._backoff = 0
+                    self._backoff = 0.0
 
 
 # 全局限流器（分数据源独立限流）
@@ -132,11 +205,11 @@ _eastmoney_limiter = RateLimiter(max_per_sec=10.0)
 _sina_limiter = RateLimiter(max_per_sec=8.0)
 
 # 限流统计
-_throttle_counts = {}
+_throttle_counts: Dict[str, int] = {}
 _throttle_lock = threading.Lock()
 
 
-def _record_throttle(src: str):
+def _record_throttle(src: str) -> None:
     with _throttle_lock:
         _throttle_counts[src] = _throttle_counts.get(src, 0) + 1
 
@@ -148,7 +221,7 @@ def get_throttle_summary() -> str:
         return "限流: " + ", ".join(f"{k} {v}次" for k, v in _throttle_counts.items())
 
 
-def reset_throttle_counts():
+def reset_throttle_counts() -> None:
     with _throttle_lock:
         _throttle_counts.clear()
 
@@ -160,9 +233,8 @@ def fetch_stock_list() -> Dict[str, str]:
     获取全部A股股票列表 {code: name}
     数据源：东方财富实时行情API（一次请求全部返回，无需分页）
     """
-    stocks = {}
+    stocks: Dict[str, str] = {}
 
-    # 东方财富 - 沪深A股列表
     try:
         stocks = _fetch_stock_list_eastmoney()
         if len(stocks) > 3000:
@@ -171,7 +243,6 @@ def fetch_stock_list() -> Dict[str, str]:
     except Exception as e:
         logger.warning(f"东方财富获取股票列表失败: {e}")
 
-    # 备用：新浪
     try:
         sina_stocks = _fetch_stock_list_sina()
         stocks.update(sina_stocks)
@@ -184,10 +255,9 @@ def fetch_stock_list() -> Dict[str, str]:
 
 def _fetch_stock_list_eastmoney() -> Dict[str, str]:
     """东方财富沪深A股列表（分页获取，约5000只）"""
-    stocks = {}
-    page_size = 100  # 东方财富每页最多100条
+    stocks: Dict[str, str] = {}
+    page_size = 100
 
-    # 分两批：深市(m:0+t:6,m:0+t:13,m:0+t:80) 和 沪市(m:1+t:2,m:1+t:23)
     for fs_type in ["m:0+t:6,m:0+t:13,m:0+t:80", "m:1+t:2,m:1+t:23"]:
         page = 1
         while True:
@@ -201,10 +271,7 @@ def _fetch_stock_list_eastmoney() -> Dict[str, str]:
             _eastmoney_limiter.wait()
             data = _http_get_json(url, headers={"Referer": "https://quote.eastmoney.com"})
             diff = data.get("data", {}).get("diff") or {}
-            if isinstance(diff, dict):
-                items = list(diff.values())
-            else:
-                items = diff
+            items = list(diff.values()) if isinstance(diff, dict) else diff
             if not items:
                 break
             for item in items:
@@ -219,64 +286,64 @@ def _fetch_stock_list_eastmoney() -> Dict[str, str]:
 
 
 def _fetch_stock_list_sina() -> Dict[str, str]:
-    """新浪A股列表（分批请求）"""
-    stocks = {}
-    # 沪市
-    for page in range(1, 30):
+    """
+    新浪A股列表（分批请求）
+    注意：新浪返回的是非标准JSON，使用容错解析而非暴力正则替换
+    """
+    stocks: Dict[str, str] = {}
+
+    def _parse_sina_json(text: str) -> List[dict]:
+        """容错解析新浪非标准JSON，避免暴力正则破坏URL等内容"""
+        text = text.strip()
+        if not text or text in ('null', '[]'):
+            return []
         try:
-            url = f"https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page={page}&num=100&sort=symbol&asc=1&node=sh_a&symbol=&_s_r_a=sez"
-            raw = _http_get(url, headers={"Referer": "https://finance.sina.com.cn"}, retry=1)
-            text = raw.decode("utf-8")
-            if not text or text.strip() in ('null', '[]'):
-                break
-            # 新浪返回的是JS风格的JSON
-            text = re.sub(r'(\w+):', r'"\1":', text)
-            items = json.loads(text)
-            if not items:
-                break
-            for item in items:
-                code = str(item.get("code", item.get("symbol", "")))[-6:]
-                name = item.get("name", "")
-                if code and name and len(code) == 6:
-                    stocks[code] = name
-            _sina_limiter.wait()
-        except Exception:
-            break
-    # 深市
-    for page in range(1, 50):
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        # 仅对裸key（开头或逗号/大括号后跟着的单词:）加引号，避免破坏已有引号和URL
+        fixed = re.sub(r'(?<=[{,])\s*([A-Za-z_]\w*)\s*:', r'"\1":', text)
         try:
-            url = f"https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page={page}&num=100&sort=symbol&asc=1&node=sz_a&symbol=&_s_r_a=sez"
-            raw = _http_get(url, headers={"Referer": "https://finance.sina.com.cn"}, retry=1)
-            text = raw.decode("utf-8")
-            if not text or text.strip() in ('null', '[]'):
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            return []
+
+    for node in ('sh_a', 'sz_a'):
+        max_page = 30 if node == 'sh_a' else 50
+        for page in range(1, max_page):
+            try:
+                url = (
+                    f"https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+                    f"Market_Center.getHQNodeData?page={page}&num=100&sort=symbol"
+                    f"&asc=1&node={node}&symbol=&_s_r_a=sez"
+                )
+                raw = _http_get(url, headers={"Referer": "https://finance.sina.com.cn"}, retry=1)
+                text = raw.decode("utf-8")
+                items = _parse_sina_json(text)
+                if not items:
+                    break
+                for item in items:
+                    code = str(item.get("code", item.get("symbol", "")))[-6:]
+                    name = item.get("name", "")
+                    if code and name and len(code) == 6 and code.isdigit():
+                        stocks[code] = name
+                _sina_limiter.wait()
+            except Exception:
                 break
-            text = re.sub(r'(\w+):', r'"\1":', text)
-            items = json.loads(text)
-            if not items:
-                break
-            for item in items:
-                code = str(item.get("code", item.get("symbol", "")))[-6:]
-                name = item.get("name", "")
-                if code and name and len(code) == 6:
-                    stocks[code] = name
-            _sina_limiter.wait()
-        except Exception:
-            break
     return stocks
 
 
 # ==================== 2. K线数据 ====================
 
 def fetch_kline(code: str, period: str = '240min', limit: int = 1500,
-                source_idx: int = 0) -> List[Dict]:
+                source_idx: int = 0) -> List[KLineBar]:
     """
     获取K线数据，东方财富优先，新浪备用
-    返回格式: [{"day": "2024-01-01", "open": "10.0", "high": ..., "close": ..., "low": ..., "volume": ...}, ...]
+    返回格式: [{"day": "2024-01-01", "open": "10.0", "high": ..., "close": ..., "low": ..., "volume": ...}]
 
     period: '1min','5min','15min','30min','60min','240min','weekly','monthly'
     """
     sources = [_fetch_kline_eastmoney, _fetch_kline_sina]
-    # 通过 source_idx 分散请求到不同数据源
     order = [sources[(source_idx + i) % len(sources)] for i in range(len(sources))]
 
     for fetch_fn in order:
@@ -297,9 +364,9 @@ def fetch_kline(code: str, period: str = '240min', limit: int = 1500,
     return []
 
 
-def _fetch_kline_eastmoney(code: str, period: str, limit: int) -> List[Dict]:
+def _fetch_kline_eastmoney(code: str, period: str, limit: int) -> List[KLineBar]:
     """东方财富K线API"""
-    KLT_MAP = {
+    KLT_MAP: Dict[str, int] = {
         '1min': 1, '5min': 5, '15min': 15, '30min': 30,
         '60min': 60, '240min': 101, 'weekly': 102, 'monthly': 103,
     }
@@ -316,9 +383,9 @@ def _fetch_kline_eastmoney(code: str, period: str, limit: int) -> List[Dict]:
         f"&_={int(time.time() * 1000)}"
     )
     resp = _http_get_json(url, headers={"Referer": "https://quote.eastmoney.com"})
-    klines = resp.get('data', {}).get('klines', []) if resp.get('data') else []
+    klines: List[str] = resp.get('data', {}).get('klines', []) if resp.get('data') else []
 
-    result = []
+    result: List[KLineBar] = []
     for line in klines:
         parts = line.split(',')
         if len(parts) >= 6:
@@ -336,9 +403,9 @@ def _fetch_kline_eastmoney(code: str, period: str, limit: int) -> List[Dict]:
     return result
 
 
-def _fetch_kline_sina(code: str, period: str, limit: int) -> List[Dict]:
+def _fetch_kline_sina(code: str, period: str, limit: int) -> List[KLineBar]:
     """新浪K线API"""
-    SCALE_MAP = {
+    SCALE_MAP: Dict[str, int] = {
         '1min': 1, '5min': 5, '15min': 15, '30min': 30,
         '60min': 60, '240min': 240, 'weekly': 240, 'monthly': 240,
     }
@@ -356,7 +423,7 @@ def _fetch_kline_sina(code: str, period: str, limit: int) -> List[Dict]:
     if not isinstance(data, list):
         return []
 
-    result = []
+    result: List[KLineBar] = []
     for d in data:
         result.append({
             "day": d.get("day", ""),
@@ -374,14 +441,12 @@ def _fetch_kline_sina(code: str, period: str, limit: int) -> List[Dict]:
 
 # ==================== 3. 行业板块 ====================
 
-def fetch_all_industry_boards() -> List[Dict]:
+def fetch_all_industry_boards() -> List[BoardInfo]:
     """
     获取所有行业板块及其成分股
     返回: [{"board_code": "BK0475", "board_name": "白酒", "stocks": ["600519","000858",...]}]
     """
-    boards = []
-
-    # 第一步：获取行业板块列表
+    boards: List[BoardInfo] = []
     try:
         _eastmoney_limiter.wait()
         url = (
@@ -430,12 +495,12 @@ def fetch_board_stocks(board_code: str) -> List[str]:
         return []
 
 
-def fetch_stock_industry(code: str) -> Dict:
+def fetch_stock_industry(code: str) -> StockIndustry:
     """
     获取个股所属行业板块
     返回: {"name": "贵州茅台", "industry": "白酒", "board_code": "BK0475"}
     """
-    result = {"name": "", "industry": "", "board_code": ""}
+    result: StockIndustry = {"name": "", "industry": "", "board_code": ""}
 
     try:
         market = 1 if code.startswith(('6', '9')) else 0
@@ -453,7 +518,6 @@ def fetch_stock_industry(code: str) -> Dict:
     except Exception as e:
         logger.debug(f"东方财富获取个股行业失败: {e}")
 
-    # 备用：腾讯行情获取名称
     if not result["name"]:
         try:
             prefix = 'sh' if code.startswith(('6', '9')) else 'sz'
@@ -473,12 +537,12 @@ def fetch_stock_industry(code: str) -> Dict:
 
 # ==================== 4. 概念板块 ====================
 
-def fetch_all_concept_boards() -> List[Dict]:
+def fetch_all_concept_boards() -> List[BoardInfo]:
     """
     获取所有概念板块
     返回: [{"board_code": "BK1050", "board_name": "人工智能", "stocks": []}]
     """
-    boards = []
+    boards: List[BoardInfo] = []
     try:
         _eastmoney_limiter.wait()
         url = (
@@ -513,9 +577,7 @@ def fetch_stock_concepts(code: str) -> List[str]:
     获取个股所属的所有概念板块名称
     返回: ["人工智能", "芯片", "华为概念", ...]
     """
-    concepts = []
-
-    # 东方财富 datacenter 个股板块信息
+    concepts: List[str] = []
     try:
         _eastmoney_limiter.wait()
         url = (
@@ -540,14 +602,13 @@ def fetch_stock_concepts(code: str) -> List[str]:
 
 # ==================== 5. 新闻 ====================
 
-def fetch_stock_news(code: str, limit: int = 10) -> List[Dict]:
+def fetch_stock_news(code: str, limit: int = 10) -> List[NewsItem]:
     """
     获取个股新闻
     返回: [{"title": "...", "date": "2024-01-01 10:00", "source": "东方财富", "url": "..."}]
     """
-    news_list = []
+    news_list: List[NewsItem] = []
 
-    # 东方财富个股新闻API
     try:
         news_list = _fetch_news_eastmoney(code, limit)
         if len(news_list) >= 3:
@@ -555,7 +616,6 @@ def fetch_stock_news(code: str, limit: int = 10) -> List[Dict]:
     except Exception as e:
         logger.debug(f"东方财富新闻获取失败: {e}")
 
-    # 备用：新浪搜索
     try:
         sina_news = _fetch_news_sina(code, limit)
         news_list.extend(sina_news)
@@ -565,7 +625,7 @@ def fetch_stock_news(code: str, limit: int = 10) -> List[Dict]:
     return news_list[:limit]
 
 
-def _fetch_news_eastmoney(code: str, limit: int) -> List[Dict]:
+def _fetch_news_eastmoney(code: str, limit: int) -> List[NewsItem]:
     """东方财富个股新闻"""
     _eastmoney_limiter.wait()
     url = (
@@ -582,7 +642,6 @@ def _fetch_news_eastmoney(code: str, limit: int) -> List[Dict]:
     raw = _http_get(url, headers={"Referer": "https://so.eastmoney.com"})
     text = raw.decode("utf-8")
 
-    # 去掉 JSONP 包装
     m = re.search(r'jQuery\((.*)\)', text, re.S)
     if not m:
         return []
@@ -592,32 +651,28 @@ def _fetch_news_eastmoney(code: str, limit: int) -> List[Dict]:
                 .get("cmsArticleWebOld", {})
                 .get("list", []))
 
-    news_list = []
+    news_list: List[NewsItem] = []
     for art in articles:
         title = art.get("title", "").strip()
-        title = re.sub(r'<[^>]+>', '', title)  # 去HTML标签
-        title = re.sub(r'[\u200b\u200c\u200d\u200e\u200f\ufeff\xa0]', '', title)  # 去零宽/特殊字符
+        title = re.sub(r'<[^>]+>', '', title)
+        title = re.sub(r'[\u200b\u200c\u200d\u200e\u200f\ufeff\xa0]', '', title)
         if not title or len(title) < 6:
             continue
 
-        date_str = art.get("date", "")
-        source = art.get("mediaName", "") or "东方财富"
-        art_url = art.get("url", "")
-
         news_list.append({
             "title": title,
-            "date": date_str,
-            "source": source,
-            "url": art_url,
+            "date": art.get("date", ""),
+            "source": art.get("mediaName", "") or "东方财富",
+            "url": art.get("url", ""),
         })
 
     _eastmoney_limiter.report_success()
     return news_list
 
 
-def _fetch_news_sina(code: str, limit: int) -> List[Dict]:
+def _fetch_news_sina(code: str, limit: int) -> List[NewsItem]:
     """新浪新闻搜索"""
-    news_list = []
+    news_list: List[NewsItem] = []
     _sina_limiter.wait()
 
     kw = urllib.parse.quote(code)
@@ -647,8 +702,8 @@ def _fetch_news_sina(code: str, limit: int) -> List[Dict]:
             m_time = re.search(r'fgray_time[^>]*>\s*(.*?)</span>', after, re.S)
             if m_time:
                 raw_meta = re.sub(r'<[^>]+>', '', m_time.group(1)).strip()
-                parts = [p.strip() for p in raw_meta.split('\n') if p.strip()]
-                date_str = parts[-1] if parts else raw_meta
+                parts_meta = [p.strip() for p in raw_meta.split('\n') if p.strip()]
+                date_str = parts_meta[-1] if parts_meta else raw_meta
 
         news_list.append({
             "title": title,
@@ -665,18 +720,13 @@ def _fetch_news_sina(code: str, limit: int) -> List[Dict]:
 
 # ==================== 6. 指数K线（行业趋势分析用） ====================
 
-def fetch_index_kline(index_code: str, days: int = 60) -> List[Dict]:
+def fetch_index_kline(index_code: str, days: int = 60) -> List[IndexBar]:
     """
     获取指数日K线
     index_code: 如 '000001'(上证), '399001'(深证), '399006'(创业板)
     """
-    # 东方财富指数K线
     try:
-        # 判断市场：上证指数1开头，深证指数0/3开头
-        if index_code.startswith('39') or index_code.startswith('00'):
-            market = 0  # 深市
-        else:
-            market = 1  # 沪市
+        market = 0 if index_code.startswith('39') or index_code.startswith('00') else 1
 
         _eastmoney_limiter.wait()
         url = (
@@ -690,7 +740,7 @@ def fetch_index_kline(index_code: str, days: int = 60) -> List[Dict]:
         resp = _http_get_json(url, headers={"Referer": "https://quote.eastmoney.com"})
         klines = resp.get('data', {}).get('klines', []) if resp.get('data') else []
 
-        result = []
+        result: List[IndexBar] = []
         for line in klines:
             parts = line.split(',')
             if len(parts) >= 6:
@@ -711,11 +761,7 @@ def fetch_index_kline(index_code: str, days: int = 60) -> List[Dict]:
 
     # 备用：新浪
     try:
-        # 转换代码格式
-        if index_code.startswith('39') or index_code.startswith('00'):
-            symbol = f"sz{index_code}"
-        else:
-            symbol = f"sh{index_code}"
+        symbol = f"sz{index_code}" if (index_code.startswith('39') or index_code.startswith('00')) else f"sh{index_code}"
 
         _sina_limiter.wait()
         url = (
@@ -727,17 +773,14 @@ def fetch_index_kline(index_code: str, days: int = 60) -> List[Dict]:
         if text.strip() in ('null', '[]', ''):
             return []
         data = json.loads(text)
-        result = []
-        for bar in data:
-            result.append({
-                'date': bar.get('day', ''),
-                'open': float(bar.get('open', 0)),
-                'close': float(bar.get('close', 0)),
-                'high': float(bar.get('high', 0)),
-                'low': float(bar.get('low', 0)),
-                'volume': float(bar.get('volume', 0)),
-            })
-        return result
+        return [{
+            'date': bar.get('day', ''),
+            'open': float(bar.get('open', 0)),
+            'close': float(bar.get('close', 0)),
+            'high': float(bar.get('high', 0)),
+            'low': float(bar.get('low', 0)),
+            'volume': float(bar.get('volume', 0)),
+        } for bar in data]
     except Exception as e:
         logger.debug(f"新浪指数K线失败 {index_code}: {e}")
 
@@ -746,43 +789,56 @@ def fetch_index_kline(index_code: str, days: int = 60) -> List[Dict]:
 
 # ==================== 7. 实时行情 ====================
 
-def fetch_realtime_quote(code: str) -> Dict:
+def fetch_realtime_quote(code: str) -> QuoteInfo:
     """
     获取个股实时行情
     返回: {"name", "price", "change_pct", "volume", "amount", "high", "low", "open", "pre_close"}
     """
+    empty: QuoteInfo = {
+        "name": "", "price": 0.0, "change_pct": 0.0,
+        "high": 0.0, "low": 0.0, "open": 0.0,
+        "pre_close": 0.0, "volume": 0, "amount": 0,
+        "turnover_rate": 0.0,
+    }
     try:
         market = 1 if code.startswith(('6', '9')) else 0
         _eastmoney_limiter.wait()
         url = (
             f"https://push2.eastmoney.com/api/qt/stock/get?"
             f"secid={market}.{code}"
-            f"&fields=f43,f44,f45,f46,f47,f48,f57,f58,f60,f170"
+            f"&fields=f43,f44,f45,f46,f47,f48,f57,f58,f60,f168,f170"
             f"&_={int(time.time() * 1000)}"
         )
         data = _http_get_json(url, headers={"Referer": "https://quote.eastmoney.com"})
         info = data.get("data", {}) or {}
 
+        def _div(val: object, div: int = 100) -> float:
+            return val / div if val else 0.0  # type: ignore[operator]
+
+        # f168 换手率，单位 ‱（万分之一），除以 100 得百分比
+        raw_turnover = info.get("f168")
+        turnover_rate = round(float(raw_turnover) / 100, 2) if raw_turnover else 0.0  # type: ignore[arg-type]
+
         return {
             "name": info.get("f58", ""),
-            "price": info.get("f43", 0) / 100 if info.get("f43") else 0,
-            "change_pct": info.get("f170", 0) / 100 if info.get("f170") else 0,
-            "high": info.get("f44", 0) / 100 if info.get("f44") else 0,
-            "low": info.get("f45", 0) / 100 if info.get("f45") else 0,
-            "open": info.get("f46", 0) / 100 if info.get("f46") else 0,
-            "pre_close": info.get("f60", 0) / 100 if info.get("f60") else 0,
+            "price": _div(info.get("f43")),
+            "change_pct": _div(info.get("f170")),
+            "high": _div(info.get("f44")),
+            "low": _div(info.get("f45")),
+            "open": _div(info.get("f46")),
+            "pre_close": _div(info.get("f60")),
             "volume": info.get("f47", 0),
             "amount": info.get("f48", 0),
+            "turnover_rate": turnover_rate,
         }
     except Exception as e:
         logger.debug(f"实时行情获取失败 {code}: {e}")
-        return {}
+        return empty
 
 
-# ==================== 8. 行业指数映射（stock_analyzer用） ====================
+# ==================== 8. 行业指数映射 ====================
 
-# 东方财富行业→板块指数代码映射
-INDUSTRY_INDEX_MAP = {
+INDUSTRY_INDEX_MAP: Dict[str, str] = {
     '白酒': '399998', '酿酒行业': '399998', '饮料制造': '399998',
     '食品饮料': '399996', '食品': '399996',
     '医药制造': '399913', '医疗器械': '399913', '生物制药': '399913',
@@ -808,7 +864,7 @@ INDUSTRY_INDEX_MAP = {
     '交通运输': '399481',
 }
 
-FALLBACK_INDICES = [
+FALLBACK_INDICES: List[Tuple[str, str]] = [
     ('000001', '上证指数'),
     ('000300', '沪深300'),
     ('399006', '创业板指'),
@@ -825,111 +881,114 @@ def get_industry_index(industry_name: str) -> Tuple[str, str]:
     return '', ''
 
 
-# ==================== 测试入口 ====================
+# ==================== 9. 主力资金流向 ====================
 
-def test_all_sources():
+def fetch_capital_flow(code: str) -> CapitalFlow:
+    """
+    获取当日主力/超大单/大单资金流向。
+
+    字段说明（东方财富 push2 API，单位均为元）：
+      f137 = 今日主力净流入（已是净值）
+      f140 = 超大单净流入（已是净值）
+      f143 = 大单净流入（已是净值）
+      f47  = 成交量（手）
+      f48  = 成交额（元）
+
+    flow_ratio 计算方式：主力净流入 / 当日成交额 * 100（%）
+    不使用 f62：该字段在收盘后/非交易时段返回接近 0 的占位值，不可靠。
+
+    返回单位：万元，flow_ratio 单位：%
+    """
+    empty: CapitalFlow = {
+        "main_net_in": 0.0,
+        "super_net_in": 0.0,
+        "big_net_in": 0.0,
+        "flow_ratio": 0.0,
+    }
+    try:
+        market = 1 if code.startswith(('6', '9')) else 0
+        _eastmoney_limiter.wait()
+        url = (
+            f"https://push2.eastmoney.com/api/qt/stock/get?"
+            f"secid={market}.{code}"
+            f"&fields=f47,f48,f137,f140,f143"
+            f"&_={int(time.time() * 1000)}"
+        )
+        data = _http_get_json(url, headers={"Referer": "https://quote.eastmoney.com"})
+        info = data.get("data", {}) or {}
+
+        def _to_wan(val: object) -> float:
+            """元 → 万元，异常值返回 0"""
+            try:
+                v = float(val)  # type: ignore[arg-type]
+                return round(v / 10000, 2)
+            except (TypeError, ValueError):
+                return 0.0
+
+        main_net  = _to_wan(info.get("f137"))   # 主力净流入（万元）
+        super_net = _to_wan(info.get("f140"))   # 超大单净流入（万元）
+        big_net   = _to_wan(info.get("f143"))   # 大单净流入（万元）
+
+        # 成交额（元）→ 万元
+        amount_wan = _to_wan(info.get("f48"))
+
+        # 强度 = 主力净流入 / 成交额，成交额为 0 时取 0
+        if amount_wan > 0:
+            flow_ratio = round(main_net / amount_wan * 100, 2)
+        else:
+            flow_ratio = 0.0
+
+        return {
+            "main_net_in":  main_net,
+            "super_net_in": super_net,
+            "big_net_in":   big_net,
+            "flow_ratio":   flow_ratio,
+        }
+    except Exception as e:
+        logger.debug(f"主力资金流向获取失败 {code}: {e}")
+        return empty
+
+
+# ==================== 10. 测试入口 ====================
+
+def test_all_sources() -> None:
     """测试所有数据源"""
     print("=" * 60)
     print("  数据源测试")
     print("=" * 60)
 
-    # 1. 股票列表
-    print("\n[1] 股票列表...")
-    try:
-        stocks = fetch_stock_list()
-        print(f"    成功: {len(stocks)} 只")
-        sample = list(stocks.items())[:3]
-        for c, n in sample:
-            print(f"    {c} {n}")
-    except Exception as e:
-        print(f"    失败: {e}")
+    test_cases = [
+        ("股票列表",        lambda: fetch_stock_list()),
+        ("K线-日线",        lambda: fetch_kline("000001", "240min", 60)),
+        ("K线-5分钟",       lambda: fetch_kline("000001", "5min", 100)),
+        ("行业板块",        lambda: fetch_all_industry_boards()),
+        ("个股行业",        lambda: fetch_stock_industry("600519")),
+        ("概念板块",        lambda: fetch_all_concept_boards()),
+        ("个股概念",        lambda: fetch_stock_concepts("600519")),
+        ("个股新闻",        lambda: fetch_stock_news("600519", 5)),
+        ("指数K线",         lambda: fetch_index_kline("000001", 30)),
+        ("实时行情",        lambda: fetch_realtime_quote("600519")),
+        ("主力资金流向",    lambda: fetch_capital_flow("600519")),
+    ]
 
-    # 2. K线
-    print("\n[2] K线数据 (000001 日线)...")
-    try:
-        klines = fetch_kline("000001", "240min", 60)
-        print(f"    成功: {len(klines)} 根")
-        if klines:
-            print(f"    最新: {klines[-1]['day']} 收盘:{klines[-1]['close']}")
-    except Exception as e:
-        print(f"    失败: {e}")
-
-    # 3. K线（分钟线）
-    print("\n[3] K线数据 (000001 5分钟线)...")
-    try:
-        klines = fetch_kline("000001", "5min", 100)
-        print(f"    成功: {len(klines)} 根")
-    except Exception as e:
-        print(f"    失败: {e}")
-
-    # 4. 行业板块
-    print("\n[4] 行业板块...")
-    try:
-        boards = fetch_all_industry_boards()
-        print(f"    成功: {len(boards)} 个板块")
-        for b in boards[:3]:
-            print(f"    {b['board_code']} {b['board_name']}")
-    except Exception as e:
-        print(f"    失败: {e}")
-
-    # 5. 个股行业
-    print("\n[5] 个股行业 (600519)...")
-    try:
-        info = fetch_stock_industry("600519")
-        print(f"    {info}")
-    except Exception as e:
-        print(f"    失败: {e}")
-
-    # 6. 概念板块
-    print("\n[6] 概念板块...")
-    try:
-        concepts = fetch_all_concept_boards()
-        print(f"    成功: {len(concepts)} 个概念")
-        for c in concepts[:3]:
-            print(f"    {c['board_code']} {c['board_name']}")
-    except Exception as e:
-        print(f"    失败: {e}")
-
-    # 7. 个股概念
-    print("\n[7] 个股概念 (600519)...")
-    try:
-        cs = fetch_stock_concepts("600519")
-        print(f"    {cs}")
-    except Exception as e:
-        print(f"    失败: {e}")
-
-    # 8. 新闻
-    print("\n[8] 个股新闻 (600519)...")
-    try:
-        news = fetch_stock_news("600519", 5)
-        print(f"    成功: {len(news)} 条")
-        for n in news[:3]:
-            print(f"    [{n['date']}] {n['title'][:40]}")
-    except Exception as e:
-        print(f"    失败: {e}")
-
-    # 9. 指数K线
-    print("\n[9] 指数K线 (上证指数)...")
-    try:
-        klines = fetch_index_kline("000001", 30)
-        print(f"    成功: {len(klines)} 根")
-    except Exception as e:
-        print(f"    失败: {e}")
-
-    # 10. 实时行情
-    print("\n[10] 实时行情 (600519)...")
-    try:
-        q = fetch_realtime_quote("600519")
-        print(f"    {q.get('name','')} {q.get('price',0)} {q.get('change_pct',0)}%")
-    except Exception as e:
-        print(f"    失败: {e}")
+    for idx, (label, fn) in enumerate(test_cases, 1):
+        print(f"\n[{idx}] {label}...")
+        try:
+            result = fn()
+            if isinstance(result, list):
+                print(f"    成功: {len(result)} 条")
+                for item in result[:3]:
+                    print(f"    {item}")
+            elif isinstance(result, dict):
+                print(f"    成功: {result}")
+            else:
+                print(f"    成功")
+        except Exception as e:
+            print(f"    失败: {e}")
 
     print(f"\n{'=' * 60}")
     throttle = get_throttle_summary()
-    if throttle:
-        print(f"  {throttle}")
-    else:
-        print("  无限流")
+    print(f"  {throttle if throttle else '无限流'}")
     print(f"{'=' * 60}")
 
 
