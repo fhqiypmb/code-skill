@@ -296,7 +296,7 @@ def _run_stock_analysis(code: str, name: str, signal_type: str) -> dict:
 
 
 def _format_analysis_for_dingtalk(analysis: dict) -> str:
-    """将基本面分析结果格式化为钉钉Markdown片段"""
+    """将个股分析结果格式化为钉钉Markdown片段"""
     if not analysis:
         return ""
 
@@ -314,42 +314,56 @@ def _format_analysis_for_dingtalk(analysis: dict) -> str:
         extra = f" ...共{len(concepts)}个" if len(concepts) > 8 else ""
         lines.append(f"**概念**: {', '.join(shown)}{extra}")
 
-    # 新闻情绪
-    news_info = analysis.get('news_info', {})
-    if news_info:
-        sentiment = news_info.get('sentiment', '中性')
-        pos = news_info.get('positive', 0)
-        neg = news_info.get('negative', 0)
-        hot = news_info.get('hot_keywords', [])
-        hot_str = f" 热点:{','.join(hot)}" if hot else ""
-        lines.append(f"**新闻**: {sentiment} (正面{pos}/负面{neg}){hot_str}")
+    # 目标价 & 止损
+    tech = analysis.get('technical', {})
+    if tech:
+        gain   = tech.get('expected_gain_pct', 0)
+        sl_pct = tech.get('stop_loss_pct', 0)
+        lines.append(
+            f"**目标价**: {tech.get('target_price', 0):.2f}"
+            f"  (+{gain:.1f}%)  **止损**: {tech.get('stop_loss', 0):.2f}"
+            f"  ({sl_pct:.1f}%)"
+        )
 
-    # 上涨概率
-    rise_prob = analysis.get('rise_probability', {})
-    if rise_prob:
-        prob = rise_prob.get('probability', 0)
-        level = rise_prob.get('level', '')
-        colored_prob = _format_colored_probability(prob)
-        lines.append(f"**上涨概率**: {colored_prob}")
+    # 成功率
+    sr = analysis.get('success_rate', {})
+    if sr:
+        score = sr.get('score', 0)
+        grade = sr.get('grade', '?')
+        colored_score = _format_colored_probability(score)
+        lines.append(f"**成功率**: {colored_score}  [{grade}级]")
 
-        # 各因子简要
-        factors = rise_prob.get('factors', {})
-        factor_names = {
-            'news_sentiment': '情绪',
-            'news_attention': '关注',
-            'concept_heat': '板块',
-            'industry_trend': '行业',
-            'market_env': '大盘',
-            'zhuli_intent': '主力',
-        }
-        factor_parts = []
-        for key in ('news_sentiment', 'news_attention', 'concept_heat',
-                     'industry_trend', 'market_env', 'zhuli_intent'):
-            if key in factors:
-                score, weight = factors[key]
-                factor_parts.append(f"{factor_names[key]}:{score:.0f}")
-        if factor_parts:
-            lines.append(f"**因子**: {' | '.join(factor_parts)}")
+        # 5维度简要
+        dim_parts = [
+            f"突破{sr.get('dim_breakout', 0):.0f}",
+            f"动能{sr.get('dim_momentum', 0):.0f}",
+            f"强度{sr.get('dim_rs', 0):.0f}",
+            f"资金{sr.get('dim_capital', 0):.0f}",
+            f"赔率{sr.get('dim_rr', 0):.0f}",
+        ]
+        lines.append(f"**维度**: {' | '.join(dim_parts)}")
+
+    # 趋势 & 市场位置
+    trend = analysis.get('trend', {})
+    mp    = analysis.get('market_pos', {})
+    if trend or mp:
+        parts = []
+        if trend:
+            parts.append(f"趋势[{trend.get('level', '?')}] {trend.get('score', 0):.0f}分")
+        if mp:
+            rs  = mp.get('relative_strength', 0)
+            rs_str = f"+{rs:.1f}%" if rs >= 0 else f"{rs:.1f}%"
+            parts.append(f"相对强度 {rs_str}")
+            parts.append(f"量比 {mp.get('vol_ratio', 1):.2f}x")
+        lines.append(f"**技术**: {' | '.join(parts)}")
+
+    # 主力资金
+    capital = analysis.get('capital', {})
+    if capital:
+        main_in = capital.get('main_net_in', 0)
+        flow    = capital.get('flow_ratio', 0)
+        dir_str = f"净买入 +{main_in:.0f}万" if main_in > 0 else f"净卖出 {main_in:.0f}万"
+        lines.append(f"**主力资金**: {dir_str}  占比 {flow:+.2f}%")
 
     return "\n\n".join(lines)
 
@@ -497,23 +511,32 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             icon = _SIGNAL_TYPE_ICONS.get(s['signal_type'], '⚪')
             lines.append(f"{icon}{s['signal_type']} {s['code']} {s['name']} ¥{d.get('close', 0):.2f}")
 
-            # 附上基本面分析摘要
+            # 附上分析摘要（成功率 + 行业 + 目标价）
             analysis = s.get('analysis', {})
-            rise_prob = analysis.get('rise_probability', {})
-            if rise_prob:
-                prob = rise_prob.get('probability', 0)
-                level = rise_prob.get('level', '')
+            if analysis:
+                sr       = analysis.get('success_rate', {})
                 industry = analysis.get('industry', '')
-                news_info = analysis.get('news_info', {})
-                sentiment = news_info.get('sentiment', '')
+                tech     = analysis.get('technical', {})
+                mp       = analysis.get('market_pos', {})
+
                 extra_parts = []
                 if industry:
                     extra_parts.append(industry)
-                if sentiment:
-                    extra_parts.append(f"新闻{sentiment}")
+                if mp:
+                    rs = mp.get('relative_strength', 0)
+                    extra_parts.append(f"RS{rs:+.1f}%")
+
                 extra_str = f" ({', '.join(extra_parts)})" if extra_parts else ""
-                colored_prob = _format_colored_probability(prob)
-                lines.append(f"  ↳ 上涨概率:{colored_prob}{extra_str}")
+
+                if sr:
+                    score = sr.get('score', 0)
+                    grade = sr.get('grade', '?')
+                    colored_score = _format_colored_probability(score)
+                    gain = tech.get('expected_gain_pct', 0) if tech else 0
+                    lines.append(
+                        f"  ↳ 成功率:{colored_score} [{grade}级]"
+                        f"  目标涨幅+{gain:.1f}%{extra_str}"
+                    )
 
     lines.append(f"共{len(all_signals)}条")
     return "\n\n".join(lines)

@@ -1,26 +1,35 @@
 """
-个股基本面分析模块
-用于选股后的辅助判断，分析：
-  1. 所属行业板块
-  2. 所属概念板块
-  3. 个股近期新闻 + 情绪分析
-  4. 实时行情
-  5. 上涨概率（多因子打分法）
+个股分析模块 - 目标导向版（短期涨幅 ≥10%）
 
-多因子打分法（5因子，技术面由选股程序覆盖）：
-  因子1 - 新闻情绪（25%）：正面/负面新闻比例 + 热点关键词
-  因子2 - 新闻关注度（15%）：近期新闻数量，关注度高则合力强
-  因子3 - 板块热度（20%）：概念板块数量 + 是否含热门概念
-  因子4 - 行业景气度（20%）：所属行业指数近期涨跌趋势
-  因子5 - 大盘环境（20%）：上证指数近期走势，系统性风险因子
+核心逻辑：
+  1. 技术目标价计算（压力位 / ATR通道 / 斐波那契扩展，三法取中）
+  2. 止损价：金叉确认阳线低点（即选股买入区低点）
+  3. 空间判断：目标涨幅 ≥10% 才标记达标，这是最低卖出考量线
+  4. 趋势强度评分（均线排列 + 量价配合 + MACD动量）
+  5. 市场位置评分（个股相对强度50% + 换手率强度50%）
+     - 相对强度：个股涨幅 vs 对应基准指数（上证/深证/创业板/科创板）
+     - 换手率强度：今日成交量 vs 近20日均量（量比）
+  6. 主力资金方向（辅助）
+  7. 成功率评分（优中选优，5个维度）
+     - 突破质量（25%）：金叉信号放量倍数、均线开口、站上MA20
+     - 趋势动能（25%）：MACD方向、均线排列完整度、近期涨速
+     - 相对强度（20%）：跑赢基准指数幅度
+     - 资金持续性（20%）：主力净买入 + 量比共振
+     - 风险收益比（10%）：目标涨幅 / 止损幅度
 
-数据源：data_source.py（东方财富为主、新浪备用，自动限流+fallback）
+输出重心：
+  - 现价 / 目标价 / 止损价 / 预期涨幅
+  - 成功率等级（S/A/B/C/D）及各维度得分
+  - 趋势强度（强 / 中 / 弱）
+  - 市场位置（相对强度 + 量比）
+  - 综合建议（达标 / 空间不足 / 趋势偏弱）
 """
 
 import sys
 import time
 import logging
-from typing import Dict, List, Tuple
+import concurrent.futures
+from typing import Dict, List, Tuple, Optional, TypedDict
 
 if sys.platform == 'win32':
     try:
@@ -29,614 +38,782 @@ if sys.platform == 'win32':
         pass
 
 import data_source
+from data_source import KLineBar, QuoteInfo, CapitalFlow
 
 logger = logging.getLogger(__name__)
 
 
-# ==================== 1. 新闻情绪分析 ====================
+# ==================== TypedDict ====================
 
-def analyze_news_sentiment(news_list: List[Dict]) -> Dict:
-    positive_kw = [
-        '增长', '突破', '新高', '大涨', '利好', '中标', '签约', '合作',
-        '创新', '扩产', '订单', '超预期', '回购', '增持', '分红', '涨停',
-        '景气', '龙头', '国产替代', 'AI', '人工智能', '芯片', '新能源',
-        '储能', '充电桩', '机器人', '无人驾驶', '低空经济',
-    ]
-    negative_kw = [
-        '下跌', '暴跌', '利空', '减持', '违规', '处罚', '亏损',
-        '下滑', '风险', '退市', '问询', '质押', '诉讼', '立案',
-    ]
-
-    pos, neg = 0, 0
-    hot = []
-    for n in news_list:
-        title = n.get('title', '')
-        for kw in positive_kw:
-            if kw in title:
-                pos += 1
-                if kw not in hot and len(hot) < 5:
-                    hot.append(kw)
-                break
-        for kw in negative_kw:
-            if kw in title:
-                neg += 1
-                break
-
-    if pos > neg + 2:
-        sentiment = '偏正面'
-    elif neg > pos + 1:
-        sentiment = '偏负面'
-    else:
-        sentiment = '中性'
-
-    return {'sentiment': sentiment, 'positive': pos, 'negative': neg, 'hot_keywords': hot}
+class TechnicalTarget(TypedDict):
+    current_price: float
+    target_price: float
+    stop_loss: float
+    expected_gain_pct: float
+    stop_loss_pct: float
+    space_ok: bool
+    method_targets: Dict[str, float]
+    atr: float
 
 
-# ==================== 2. 上涨概率 - 多因子打分 ====================
-
-# 热门概念关键词（命中加分）
-HOT_CONCEPTS = [
-    'AI', '人工智能', '芯片', '半导体', '机器人', '无人驾驶', '低空经济',
-    '新能源', '储能', '光伏', '充电桩', '国产替代', '华为', '鸿蒙',
-    '数据要素', '算力', '大模型', '量子计算', '卫星互联网',
-    '固态电池', '钙钛矿', '人形机器人', 'Sora', '具身智能',
-]
+class TrendStrength(TypedDict):
+    score: float
+    level: str                 # 强 / 中 / 弱
+    ma_align: bool
+    vol_price_ok: bool
+    macd_positive: bool
+    detail: Dict[str, float]
 
 
-
-def _score_news_sentiment(news_info: Dict) -> float:
-    """因子2：新闻情绪评分（0~100）
-    根据正面/负面新闻条数比例打分。
-    """
-    pos = news_info.get('positive', 0)
-    neg = news_info.get('negative', 0)
-    total = pos + neg
-
-    if total == 0:
-        return 50.0  # 无新闻，中性
-
-    ratio = pos / total  # 正面占比 0~1
-    # 映射到 20~90 区间（全负面20，全正面90）
-    score = 20 + ratio * 70
-
-    # 额外：热点关键词加分（每个+2，最多+10）
-    hot_count = len(news_info.get('hot_keywords', []))
-    score += min(hot_count * 2, 10)
-
-    return min(score, 100.0)
+class MarketPosition(TypedDict):
+    score: float               # 市场位置总分 [0, 100]
+    level: str                 # 强 / 中 / 弱
+    relative_strength: float   # 个股涨幅 - 基准指数涨幅（%，近5日）
+    rs_score: float            # 相对强度评分 [0, 100]
+    vol_ratio: float           # 量比（今日量 / 近20日均量）
+    vr_score: float            # 量比评分 [0, 100]
+    benchmark: str             # 基准指数代码
+    benchmark_name: str        # 基准指数名称
 
 
-def _score_concept_heat(concepts: List[str]) -> float:
-    """因子4：板块热度评分（0~100）
-    概念数量 + 是否含热门概念。
-    """
-    if not concepts:
-        return 30.0
-
-    score = 30.0
-
-    # (a) 概念数量：每个+2，最多+20
-    score += min(len(concepts) * 2, 20)
-
-    # (b) 热门概念命中：每个+8，最多+40
-    hot_hits = 0
-    for concept in concepts:
-        for hot in HOT_CONCEPTS:
-            if hot in concept or concept in hot:
-                hot_hits += 1
-                break
-    score += min(hot_hits * 8, 40)
-
-    # (c) 概念数量>=10说明题材丰富，额外+10
-    if len(concepts) >= 10:
-        score += 10
-
-    return min(score, 100.0)
+class SuccessRate(TypedDict):
+    score: float               # 综合成功率 [0, 100]
+    grade: str                 # S / A / B / C / D
+    dim_breakout: float        # 突破质量得分 [0,100]
+    dim_momentum: float        # 趋势动能得分 [0,100]
+    dim_rs: float              # 相对强度得分 [0,100]
+    dim_capital: float         # 资金持续性得分 [0,100]
+    dim_rr: float              # 风险收益比得分 [0,100]
 
 
-def _score_news_attention(news_list: List[Dict]) -> float:
-    """新闻关注度评分（0~100）
-    
-    核心逻辑：不只看条数，而是考虑
-    1. 媒体权威性 - 权威媒体权重更高
-    2. 时效性 - 24h 内新闻权重 > 3 天内 > 7 天内
-    3. 去重 - 同一新闻多渠道转载只算一次
-    
-    加权得分 = Σ(单条新闻权重 × 基础分)
-    """
-    if not news_list:
-        return 20.0
-    
-    # 权威媒体列表（财联社、证券时报等）
-    AUTH_MEDIA = [
-        '财联社', '证券时报', '上海证券报', '中国证券报',
-        '证券日报', '央视财经', '第一财经', '界面新闻',
-        '澎湃新闻', '每经', '经济观察', ' Wind', '同花顺',
-        '东方财富', '新浪财经', '腾讯证券', '网易财经',
-    ]
-    
-    # 自媒体/不确定来源
-    AUTO_MEDIA = ['搜狐', '今日头条', '百度', '微信', '微博', '自媒体']
-    
-    now = time.time()
-    weighted_count = 0.0
-    seen_titles = set()  # 去重
-    
-    for news in news_list:
-        title = news.get('title', '')
-        source = news.get('source', '')
-        date_str = news.get('date', '')
-        
-        # (1) 标题去重 - 相同标题只算一次
-        title_hash = title[:30]  # 取前 30 字作为标识
-        if title_hash in seen_titles:
-            continue
-        seen_titles.add(title_hash)
-        
-        # (2) 媒体权威性权重
-        if any(m in source for m in AUTH_MEDIA):
-            media_weight = 1.0  # 权威媒体
-        elif any(m in source for m in AUTO_MEDIA):
-            media_weight = 0.3  # 自媒体/转载
-        else:
-            media_weight = 0.6  # 未知来源
-        
-        # (3) 时效性权重
-        try:
-            # 解析日期格式 "2024-01-15 10:30" 或 "2024-01-15"
-            if ' ' in date_str:
-                dt = time.strptime(date_str, '%Y-%m-%d %H:%M')
-            else:
-                dt = time.strptime(date_str, '%Y-%m-%d')
-            hours_ago = (now - time.mktime(dt)) / 3600
-        except:
-            hours_ago = 48  # 无法解析按 48 小时前算
-        
-        if hours_ago <= 24:
-            time_weight = 1.0  # 24 小时内
-        elif hours_ago <= 72:
-            time_weight = 0.6  # 3 天内
-        elif hours_ago <= 168:
-            time_weight = 0.3  # 7 天内
-        else:
-            time_weight = 0.1  # 超过 7 天
-        
-        # 单条新闻贡献 = 基础分 × 媒体权重 × 时效权重
-        weighted_count += media_weight * time_weight
-    
-    # 映射到分数区间
-    # 加权后 0 条=20 分，10+=90 分
-    if weighted_count <= 0:
-        return 20.0
-    elif weighted_count <= 1:
-        return 30.0
-    elif weighted_count <= 3:
-        return 50.0
-    elif weighted_count <= 5:
-        return 65.0
-    elif weighted_count <= 8:
-        return 80.0
-    else:
-        return min(90.0, 80 + weighted_count * 2)
+class AnalysisResult(TypedDict):
+    code: str
+    name: str
+    industry: str
+    concepts: List[str]
+    quote: QuoteInfo
+    capital: CapitalFlow
+    technical: TechnicalTarget
+    trend: TrendStrength
+    market_pos: MarketPosition
+    success_rate: SuccessRate
+    capital_confirmed: bool    # 今日主力是否净买入
+    verdict: str               # 达标 / 空间不足 / 趋势偏弱
+    signal_type: str
 
 
-def _score_industry_trend(industry: str) -> float:
-    """行业景气度评分（0~100）
-    通过所属行业指数近期走势判断板块景气度。
-    行业整体上涨时个股跟涨概率更大（板块效应）。
-    """
-    try:
-        index_code, _ = data_source.get_industry_index(industry)
-        if not index_code:
-            return 50.0  # 无对应行业指数，中性
+# ==================== 1. 技术目标价计算 ====================
 
-        klines = data_source.fetch_index_kline(index_code, 20)
-        if not klines or len(klines) < 10:
-            return 50.0
-
-        score = 50.0
-
-        # (a) 近5日涨幅
-        closes = [k['close'] for k in klines]
-        chg_5 = (closes[-1] - closes[-6]) / closes[-6] * 100 if len(closes) >= 6 else 0
-        # -3%~+5% 映射到 -15~+25
-        score += max(-15, min(25, chg_5 * 5))
-
-        # (b) 近10日涨幅趋势（正=上行趋势）
-        if len(closes) >= 10:
-            chg_10 = (closes[-1] - closes[-11]) / closes[-11] * 100 if len(closes) >= 11 else 0
-            score += max(-10, min(15, chg_10 * 3))
-
-        # (c) 近5日是否连续上涨（3天以上收阳）
-        if len(klines) >= 5:
-            up_days = sum(1 for k in klines[-5:] if k['close'] > k['open'])
-            if up_days >= 4:
-                score += 10
-            elif up_days >= 3:
-                score += 5
-            elif up_days <= 1:
-                score -= 5
-
-        return max(0, min(100, score))
-
-    except Exception as e:
-        logger.debug(f"行业景气度评分失败 {industry}: {e}")
-        return 50.0
+def _calc_atr(klines: List[KLineBar], period: int = 14) -> float:
+    if len(klines) < period + 1:
+        return 0.0
+    trs: List[float] = []
+    bars = klines[-(period + 1):]
+    for i in range(1, len(bars)):
+        high = float(bars[i]['high'])
+        low  = float(bars[i]['low'])
+        prev_close = float(bars[i - 1]['close'])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    return sum(trs) / len(trs) if trs else 0.0
 
 
-def _score_market_env() -> float:
-    """大盘环境评分（0~100）
-    上证指数近期走势，反映系统性风险。
-    牛市环境中个股上涨概率普遍更高，熊市中打折。
-    """
-    try:
-        klines = data_source.fetch_index_kline('000001', 20)
-        if not klines or len(klines) < 10:
-            return 50.0
-
-        score = 50.0
-        closes = [k['close'] for k in klines]
-
-        # (a) 近5日涨幅
-        if len(closes) >= 6:
-            chg_5 = (closes[-1] - closes[-6]) / closes[-6] * 100
-            score += max(-15, min(20, chg_5 * 5))
-
-        # (b) 近10日涨幅
-        if len(closes) >= 11:
-            chg_10 = (closes[-1] - closes[-11]) / closes[-11] * 100
-            score += max(-10, min(15, chg_10 * 3))
-
-        # (c) 近5日阳线占比
-        if len(klines) >= 5:
-            up_days = sum(1 for k in klines[-5:] if k['close'] > k['open'])
-            if up_days >= 4:
-                score += 10
-            elif up_days >= 3:
-                score += 5
-            elif up_days <= 1:
-                score -= 10
-
-        return max(0, min(100, score))
-
-    except Exception as e:
-        logger.debug(f"大盘环境评分失败: {e}")
-        return 50.0
+def _resistance_target(klines: List[KLineBar], current: float, lookback: int = 60) -> float:
+    """压力位法：近 lookback 根 K 线中高于当前价的最低高点"""
+    if not klines:
+        return current * 1.10
+    recent = klines[-lookback:] if len(klines) >= lookback else klines
+    highs = [float(k['high']) for k in recent]
+    resistances = [h for h in highs if h > current * 1.01]
+    return min(resistances) if resistances else max(highs)
 
 
-
-def _score_zhuli_intent(code: str, klines, news_list, concepts, industry, quote) -> float:
-    """因子 6：主力意图评分（0~100）- 主力思维模拟分析"""
-    if not klines or len(klines) < 30:
-        return 50.0
-    closes = [float(k['close']) for k in klines[-30:]]
-    volumes = [float(k['volume']) for k in klines[-30:]]
-    ma5 = sum(closes[-5:]) / 5 if len(closes) >= 5 else 0
-    ma10 = sum(closes[-10:]) / 10 if len(closes) >= 10 else 0
-    avg_vol_5 = sum(volumes[-5:]) / 5 if len(volumes) >= 5 else 1
-    vol_ratio = volumes[-1] / avg_vol_5 if avg_vol_5 > 0 else 1
-    chg_10 = (closes[-1] - closes[-11]) / closes[-11] * 100 if len(closes) >= 11 else 0
-    min_p, max_p = min(closes), max(closes)
-    price_pos = (closes[-1] - min_p) / (max_p - min_p) * 100 if max_p > min_p else 50
-    pos_news = sum(1 for n in news_list if any(kw in n.get('title', '') for kw in ['增长', '突破', '利好', '中标', '签约', '新高']))
-    neg_news = sum(1 for n in news_list if any(kw in n.get('title', '') for kw in ['下跌', '利空', '减持', '违规', '亏损']))
-    score = 50
-    if price_pos < 20: score += 25
-    elif price_pos < 40: score += 10
-    elif price_pos > 80: score -= 35
-    elif price_pos > 70: score -= 15
-    if vol_ratio > 3 and price_pos > 70: score -= 25
-    elif vol_ratio > 2.5: score -= 15
-    elif vol_ratio > 1.5: score += 15 if price_pos < 50 else 5
-    elif vol_ratio < 0.5: score -= 10
-    if chg_10 > 30: score -= 25
-    elif chg_10 > 20: score -= 15
-    elif chg_10 > 10: score -= 5
-    elif chg_10 < -20: score += 10
-    elif chg_10 < -5: score += 5
-    if pos_news > neg_news + 3: score += 15
-    elif neg_news > pos_news + 1: score -= 10
-    hot = ['AI', '芯片', '机器人', '新能源', '华为', '半导体', '低空经济', '储能']
-    hot_hits = [c for c in concepts if any(h in c for h in hot)]
-    if len(hot_hits) >= 2: score += 15
-    elif len(concepts) >= 6: score += 5
-    return float(max(0, min(100, score)))
+def _atr_channel_target(current: float, atr: float, multiplier: float = 3.0) -> float:
+    """ATR 通道法：当前价 + N 倍 ATR"""
+    return current + atr * multiplier if atr > 0 else current * 1.12
 
 
-def calc_rise_probability(code: str, signal_type: str, news_info: Dict,
-                          concepts: List[str], quote: Dict,
-                          news_list: List[Dict] = None,
-                          industry: str = '',
-                          klines = None) -> Dict:
-    """
-    多因子打分法计算上涨概率（5因子，不含技术面）
+def _fib_extension_target(klines: List[KLineBar], current: float, lookback: int = 60) -> float:
+    """斐波那契扩展法：波段低点起 1.618 扩展"""
+    if len(klines) < 10:
+        return current * 1.10
+    recent = klines[-lookback:] if len(klines) >= lookback else klines
+    swing_low = min(float(k['low']) for k in recent)
+    wave = current - swing_low
+    return swing_low + wave * 1.618 if wave > 0 else current * 1.10
 
-    参数:
-      code: 股票代码
-      signal_type: 信号类型（保留参数，不参与评分）
-      news_info: 新闻情绪分析结果
-      concepts: 概念板块列表
-      quote: 实时行情
-      news_list: 原始新闻列表（用于关注度评分）
-      industry: 所属行业（用于行业景气度评分）
 
-    返回:
-      {
-        'probability': 72.5,           # 综合上涨概率 (0~100)
-        'level': '较高',               # 概率等级
-        'factors': {                   # 各因子得分明细
-          'news_sentiment': (70, 0.25),
-          'news_attention': (65, 0.15),
-          'concept_heat': (60, 0.20),
-          'industry_trend': (72, 0.20),
-          'market_env': (68, 0.20),
+def calc_target_price(klines: List[KLineBar], current_price: float) -> TechnicalTarget:
+    """三法取中位数计算目标价，限制在 [current*1.05, current*1.40]"""
+    if not klines or current_price <= 0:
+        return {
+            'current_price': current_price,
+            'target_price': round(current_price * 1.10, 2),
+            'stop_loss': round(current_price * 0.95, 2),
+            'expected_gain_pct': 10.0,
+            'stop_loss_pct': -5.0,
+            'space_ok': True,
+            'method_targets': {},
+            'atr': 0.0,
         }
-      }
-    """
-    if news_list is None:
-        news_list = []
 
-    # 各因子权重
-    weights = {
-        'news_sentiment': 0.20,
-        'news_attention': 0.12,
-        'concept_heat': 0.16,
-        'industry_trend': 0.16,
-        'market_env': 0.16,
-        'zhuli_intent': 0.20,
-    }
+    atr = _calc_atr(klines)
+    t_r = _resistance_target(klines, current_price)
+    t_a = _atr_channel_target(current_price, atr)
+    t_f = _fib_extension_target(klines, current_price)
 
-    # 计算各因子得分
-    scores = {
-        'news_sentiment': _score_news_sentiment(news_info),
-        'news_attention': _score_news_attention(news_list),
-        'concept_heat': _score_concept_heat(concepts),
-        'industry_trend': _score_industry_trend(industry),
-        'market_env': _score_market_env(),
-        'zhuli_intent': _score_zhuli_intent(code, klines, news_list, concepts, industry, quote),
-    }
+    target = sorted([t_r, t_a, t_f])[1]
+    target = max(target, current_price * 1.05)
+    target = min(target, current_price * 1.40)
+    target = round(target, 2)
 
-    # 加权求和
-    probability = sum(scores[k] * weights[k] for k in weights)
-    probability = round(max(0, min(100, probability)), 1)
+    recent5 = klines[-5:] if len(klines) >= 5 else klines
+    stop = max(min(float(k['low']) for k in recent5), current_price * 0.85)
+    stop = round(stop, 2)
 
-    # 概率等级
-    if probability >= 80:
-        level = '很高'
-    elif probability >= 65:
-        level = '较高'
-    elif probability >= 50:
-        level = '中等'
-    elif probability >= 35:
-        level = '较低'
-    else:
-        level = '低'
-
-    factors = {k: (round(scores[k], 1), weights[k]) for k in weights}
+    expected_gain = round((target - current_price) / current_price * 100, 1)
+    stop_loss_pct = round((stop - current_price) / current_price * 100, 1)
 
     return {
-        'probability': probability,
-        'level': level,
-        'factors': factors,
+        'current_price': current_price,
+        'target_price': target,
+        'stop_loss': stop,
+        'expected_gain_pct': expected_gain,
+        'stop_loss_pct': stop_loss_pct,
+        'space_ok': expected_gain >= 10.0,
+        'method_targets': {
+            '压力位法': round(t_r, 2),
+            'ATR通道法': round(t_a, 2),
+            '斐波那契': round(t_f, 2),
+        },
+        'atr': round(atr, 3),
     }
 
 
-# ==================== 3. 综合分析入口 ====================
+# ==================== 2. 趋势强度评分 ====================
 
-def analyze_stock(code: str, name: str = '', signal_type: str = '') -> Dict:
+def _ma(closes: List[float], n: int) -> Optional[float]:
+    return sum(closes[-n:]) / n if len(closes) >= n else None
+
+
+def calc_trend_strength(klines: List[KLineBar]) -> TrendStrength:
+    """均线排列(40%) + 量价配合(35%) + MACD动量(25%)"""
+    if not klines or len(klines) < 35:
+        return {
+            'score': 50.0, 'level': '中',
+            'ma_align': False, 'vol_price_ok': False, 'macd_positive': False,
+            'detail': {'ma_align': 50.0, 'vol_price': 50.0, 'macd': 50.0},
+        }
+
+    closes  = [float(k['close']) for k in klines]
+    volumes = [float(k['volume']) for k in klines]
+
+    # ---- 均线排列 ----
+    ma5  = _ma(closes, 5)
+    ma10 = _ma(closes, 10)
+    ma20 = _ma(closes, 20)
+    ma30 = _ma(closes, 30)
+
+    ma_score = 30.0
+    ma_align = False
+    if ma5 and ma10 and ma20 and ma30:
+        if ma5 > ma10 > ma20 > ma30:
+            ma_score, ma_align = 100.0, True
+        elif ma5 > ma10 > ma20:
+            ma_score, ma_align = 80.0, True
+        elif ma5 > ma10:
+            ma_score = 60.0
+        elif ma5 < ma10 < ma20:
+            ma_score = 10.0
+    if ma20 and closes[-1] > ma20:
+        ma_score = min(ma_score + 10, 100.0)
+
+    # ---- 量价配合 ----
+    recent10 = klines[-10:] if len(klines) >= 10 else klines
+    up_bars   = [k for k in recent10 if float(k['close']) > float(k['open'])]
+    down_bars = [k for k in recent10 if float(k['close']) < float(k['open'])]
+    avg_up_v  = sum(float(k['volume']) for k in up_bars) / len(up_bars) if up_bars else 0
+    avg_dn_v  = sum(float(k['volume']) for k in down_bars) / len(down_bars) if down_bars else 1
+    vp_ratio  = avg_up_v / avg_dn_v if avg_dn_v > 0 else 1.0
+
+    avg_vol_5  = sum(volumes[-5:]) / 5   if len(volumes) >= 5  else volumes[-1]
+    avg_vol_20 = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else avg_vol_5
+    vol_trend  = avg_vol_5 / avg_vol_20  if avg_vol_20 > 0 else 1.0
+
+    vp_score = 50.0
+    if vp_ratio >= 2.0:   vp_score += 35
+    elif vp_ratio >= 1.5: vp_score += 20
+    elif vp_ratio >= 1.2: vp_score += 10
+    elif vp_ratio < 0.8:  vp_score -= 20
+    if vol_trend >= 1.5:   vp_score += 15
+    elif vol_trend >= 1.1: vp_score += 8
+    elif vol_trend < 0.7:  vp_score -= 10
+    vp_score = max(0.0, min(100.0, vp_score))
+    vol_price_ok = vp_ratio >= 1.2
+
+    # ---- MACD 动量 ----
+    def _ema(data: List[float], period: int) -> List[float]:
+        k = 2 / (period + 1)
+        r = [data[0]]
+        for v in data[1:]:
+            r.append(v * k + r[-1] * (1 - k))
+        return r
+
+    macd_score = 50.0
+    macd_positive = False
+    if len(closes) >= 26:
+        ema12 = _ema(closes, 12)
+        ema26 = _ema(closes, 26)
+        dif = [a - b for a, b in zip(ema12, ema26)]
+        dea = _ema(dif, 9) if len(dif) >= 9 else dif
+        curr_dif, curr_dea = dif[-1], dea[-1]
+        prev_dif = dif[-2] if len(dif) >= 2 else curr_dif
+        if curr_dif > 0 and curr_dea > 0:
+            macd_score, macd_positive = 80.0, True
+        elif curr_dif > 0:
+            macd_score, macd_positive = 65.0, True
+        elif curr_dif <= 0 and curr_dea <= 0:
+            macd_score = 25.0
+        macd_score += 15 if curr_dif > prev_dif else -10
+        macd_score = max(0.0, min(100.0, macd_score))
+
+    total = round(ma_score * 0.40 + vp_score * 0.35 + macd_score * 0.25, 1)
+    total = max(0.0, min(100.0, total))
+    level = '强' if total >= 70 else ('中' if total >= 45 else '弱')
+
+    return {
+        'score': total, 'level': level,
+        'ma_align': ma_align, 'vol_price_ok': vol_price_ok, 'macd_positive': macd_positive,
+        'detail': {'ma_align': round(ma_score, 1), 'vol_price': round(vp_score, 1), 'macd': round(macd_score, 1)},
+    }
+
+
+# ==================== 3. 市场位置（相对强度 + 量比） ====================
+
+# 基准指数映射：按股票代码前缀匹配
+_BENCHMARK_MAP: Dict[str, Tuple[str, str]] = {
+    '30': ('399006', '创业板指'),
+    '68': ('000688', '科创50'),
+    '00': ('399001', '深证成指'),
+}
+_DEFAULT_BENCHMARK: Tuple[str, str] = ('000001', '上证指数')
+
+
+def _get_benchmark(code: str) -> Tuple[str, str]:
+    for prefix, info in _BENCHMARK_MAP.items():
+        if code.startswith(prefix):
+            return info
+    return _DEFAULT_BENCHMARK
+
+
+def _score_relative_strength(klines: List[KLineBar],
+                              benchmark_code: str) -> Tuple[float, float]:
     """
-    对一只股票做基本面分析 + 上涨概率：
-      - 实时行情
-      - 所属行业
-      - 所属概念板块
-      - 个股新闻 + 情绪
-      - 上涨概率（多因子打分）
+    个股相对强度评分。
+    用个股近5日涨幅 - 基准指数近5日涨幅，差值即相对强度。
+    返回 (评分[0,100], 相对强度%)
     """
-    # 1. 基本信息：行业
+    if not klines or len(klines) < 6:
+        return 50.0, 0.0
+    try:
+        idx_klines = data_source.fetch_index_kline(benchmark_code, 15)
+        if not idx_klines or len(idx_klines) < 6:
+            return 50.0, 0.0
+    except Exception:
+        return 50.0, 0.0
+
+    stock_closes = [float(k['close']) for k in klines]
+    stock_chg5 = (stock_closes[-1] - stock_closes[-6]) / stock_closes[-6] * 100
+
+    idx_closes = [k['close'] for k in idx_klines]
+    idx_chg5 = (idx_closes[-1] - idx_closes[-6]) / idx_closes[-6] * 100
+
+    rs = round(stock_chg5 - idx_chg5, 2)
+
+    if rs >= 10:    score = 100.0
+    elif rs >= 5:   score = 85.0
+    elif rs >= 2:   score = 70.0
+    elif rs >= 0:   score = 55.0
+    elif rs >= -2:  score = 40.0
+    elif rs >= -5:  score = 25.0
+    else:           score = 10.0
+
+    return round(score, 1), rs
+
+
+def _score_vol_ratio(klines: List[KLineBar], today_volume: float) -> Tuple[float, float]:
+    """
+    量比评分（换手率强度近似）。
+    量比 = 今日成交量 / 近20日日均成交量。
+    返回 (评分[0,100], 量比)
+    """
+    if not klines or len(klines) < 5:
+        return 50.0, 1.0
+
+    hist = klines[-20:] if len(klines) >= 20 else klines
+    avg_vol = sum(float(k['volume']) for k in hist) / len(hist)
+    if avg_vol <= 0:
+        return 50.0, 1.0
+
+    vol = today_volume if today_volume > 0 else float(klines[-1]['volume'])
+    vr = round(vol / avg_vol, 2)
+
+    if vr >= 3.0:    score = 95.0
+    elif vr >= 2.0:  score = 80.0
+    elif vr >= 1.5:  score = 68.0
+    elif vr >= 1.0:  score = 55.0
+    elif vr >= 0.7:  score = 38.0
+    elif vr >= 0.5:  score = 22.0
+    else:            score = 10.0
+
+    return round(score, 1), vr
+
+
+def calc_market_position(code: str, klines: List[KLineBar],
+                          today_volume: float) -> MarketPosition:
+    """市场位置综合评分：相对强度(50%) + 量比(50%)"""
+    benchmark_code, benchmark_name = _get_benchmark(code)
+    rs_score, rs_val = _score_relative_strength(klines, benchmark_code)
+    vr_score, vr_val = _score_vol_ratio(klines, today_volume)
+
+    total = round(rs_score * 0.5 + vr_score * 0.5, 1)
+    level = '强' if total >= 70 else ('中' if total >= 45 else '弱')
+
+    return {
+        'score':             total,
+        'level':             level,
+        'relative_strength': rs_val,
+        'rs_score':          rs_score,
+        'vol_ratio':         vr_val,
+        'vr_score':          vr_score,
+        'benchmark':         benchmark_code,
+        'benchmark_name':    benchmark_name,
+    }
+
+
+# ==================== 4. 成功率评分（优中选优） ====================
+
+def calc_success_rate(
+    klines: List[KLineBar],
+    technical: TechnicalTarget,
+    trend: TrendStrength,
+    market_pos: MarketPosition,
+    capital: CapitalFlow,
+) -> SuccessRate:
+    """
+    5维度成功率评分 [0,100]，用于达标股票间的优先级排序。
+
+    维度权重：
+      突破质量  25% —— 信号本身的可靠性
+      趋势动能  25% —— 趋势能否持续推动到目标价
+      相对强度  20% —— 主力是否专注拉升这只
+      资金持续性 20% —— 资金是否持续流入
+      风险收益比 10% —— 同样涨10%，亏损空间越小越好
+
+    等级：S≥80 / A≥65 / B≥50 / C≥35 / D<35
+    """
+    closes  = [float(k['close']) for k in klines] if klines else []
+    volumes = [float(k['volume']) for k in klines] if klines else []
+
+    # ── 维度1：突破质量 ──────────────────────────────────────────
+    # 衡量金叉信号发出时的力度：放量倍数、均线多头、价格站上MA20
+    bk_score = 40.0  # 基础分
+
+    # 近5日成交量 vs 近20日均量（放量倍数）
+    if len(volumes) >= 20:
+        avg20 = sum(volumes[-20:]) / 20
+        avg5  = sum(volumes[-5:]) / 5
+        vol_mult = avg5 / avg20 if avg20 > 0 else 1.0
+        if vol_mult >= 2.5:   bk_score += 35
+        elif vol_mult >= 1.8: bk_score += 25
+        elif vol_mult >= 1.3: bk_score += 15
+        elif vol_mult >= 1.0: bk_score += 5
+        else:                 bk_score -= 10
+
+    # 均线多头加分
+    if trend.get('ma_align'):
+        bk_score += 20
+
+    # 价格站上MA20（已在趋势里计算，直接复用）
+    ma20_score = trend.get('detail', {}).get('ma_align', 50.0)
+    if ma20_score >= 80:
+        bk_score += 5
+
+    bk_score = max(0.0, min(100.0, bk_score))
+
+    # ── 维度2：趋势动能 ──────────────────────────────────────────
+    # 直接复用趋势强度总分，但对MACD正向额外加权
+    mo_score = trend.get('score', 50.0)
+    if trend.get('macd_positive'):
+        mo_score = min(mo_score + 10, 100.0)
+
+    # 近10日价格动量（稳步上涨 vs 剧烈震荡）
+    if len(closes) >= 10:
+        chg10 = (closes[-1] - closes[-11]) / closes[-11] * 100 if len(closes) >= 11 else 0
+        # 稳健涨幅5~15%加分，涨太多反而追高风险高
+        if 5 <= chg10 <= 15:    mo_score = min(mo_score + 10, 100.0)
+        elif chg10 > 25:        mo_score = max(mo_score - 15, 0.0)
+        elif chg10 < 0:         mo_score = max(mo_score - 10, 0.0)
+
+    mo_score = max(0.0, min(100.0, mo_score))
+
+    # ── 维度3：相对强度 ──────────────────────────────────────────
+    # 直接复用市场位置里的相对强度评分
+    rs_score = market_pos.get('rs_score', 50.0)
+
+    # ── 维度4：资金持续性 ─────────────────────────────────────────
+    # 主力净买入 + 量比共振
+    main_in    = capital.get('main_net_in', 0.0)
+    flow_ratio = capital.get('flow_ratio', 0.0)
+    vr         = market_pos.get('vol_ratio', 1.0)
+
+    cap_score = 40.0
+    # 主力净买入方向
+    if main_in > 5000:    cap_score += 35
+    elif main_in > 2000:  cap_score += 25
+    elif main_in > 500:   cap_score += 15
+    elif main_in > 0:     cap_score += 5
+    elif main_in < -2000: cap_score -= 25
+    elif main_in < 0:     cap_score -= 10
+
+    # 净流入占成交额比例
+    if flow_ratio > 5:    cap_score += 15
+    elif flow_ratio > 2:  cap_score += 8
+    elif flow_ratio < -2: cap_score -= 10
+
+    # 量比共振（量比高 + 主力净买入 = 资金持续涌入）
+    if vr >= 2.0 and main_in > 0:  cap_score += 10
+    elif vr < 0.7:                 cap_score -= 8
+
+    cap_score = max(0.0, min(100.0, cap_score))
+
+    # ── 维度5：风险收益比 ─────────────────────────────────────────
+    # 目标涨幅 / |止损幅度|，比值越高越划算
+    gain   = technical.get('expected_gain_pct', 10.0)
+    sl_pct = abs(technical.get('stop_loss_pct', -5.0))
+    rr     = gain / sl_pct if sl_pct > 0 else 2.0
+
+    if rr >= 4.0:    rr_score = 100.0
+    elif rr >= 3.0:  rr_score = 85.0
+    elif rr >= 2.0:  rr_score = 70.0
+    elif rr >= 1.5:  rr_score = 55.0
+    elif rr >= 1.0:  rr_score = 40.0
+    else:            rr_score = 20.0
+
+    # ── 综合加权 ─────────────────────────────────────────────────
+    score = (
+        bk_score * 0.25 +
+        mo_score * 0.25 +
+        rs_score * 0.20 +
+        cap_score * 0.20 +
+        rr_score * 0.10
+    )
+    score = round(max(0.0, min(100.0, score)), 1)
+
+    if score >= 80:   grade = 'S'
+    elif score >= 65: grade = 'A'
+    elif score >= 50: grade = 'B'
+    elif score >= 35: grade = 'C'
+    else:             grade = 'D'
+
+    return {
+        'score':        score,
+        'grade':        grade,
+        'dim_breakout': round(bk_score, 1),
+        'dim_momentum': round(mo_score, 1),
+        'dim_rs':       round(rs_score, 1),
+        'dim_capital':  round(cap_score, 1),
+        'dim_rr':       round(rr_score, 1),
+    }
+
+
+# ==================== 5. 主力资金确认 ====================
+
+def _capital_confirmed(capital: CapitalFlow) -> bool:
+    """今日主力净买入（main_net_in > 0）视为多头方向"""
+    return capital.get('main_net_in', 0.0) > 0
+
+
+# ==================== 6. 综合分析入口 ====================
+
+def analyze_stock(code: str, name: str = '', signal_type: str = '') -> AnalysisResult:
+    """并发获取数据，计算目标价 / 趋势强度 / 市场位置 / 成功率 / 资金方向"""
     stock_info = data_source.fetch_stock_industry(code)
     if not name:
         name = stock_info.get('name', code)
     industry = stock_info.get('industry', '')
 
-    # 2. 实时行情
-    quote = data_source.fetch_realtime_quote(code)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        fut_quote    = executor.submit(data_source.fetch_realtime_quote, code)
+        fut_concepts = executor.submit(data_source.fetch_stock_concepts, code)
+        fut_klines   = executor.submit(data_source.fetch_kline, code, '240min', 120)
+        fut_capital  = executor.submit(data_source.fetch_capital_flow, code)
 
-    # 3. 概念板块
-    concepts = data_source.fetch_stock_concepts(code)
+        quote    = fut_quote.result()
+        concepts = fut_concepts.result()
+        klines   = fut_klines.result()
+        capital  = fut_capital.result()
 
-    # 4. 个股新闻（现在看质量不是数量，10 条足够）
-    news_list = data_source.fetch_stock_news(code, 10)
-    # 4. 个股新闻（增加数量以便更好评估关注度）
-    news_list = data_source.fetch_stock_news(code, 30)
-    news_info = analyze_news_sentiment(news_list)
+    current_price = quote.get('price', 0.0)
+    if current_price <= 0 and klines:
+        current_price = float(klines[-1]['close'])
 
-    # 5. K 线数据（主力分析需要）
-    klines = data_source.fetch_kline(code, '240min', 60)
-    
-    # 6. 上涨概率（多因子打分，含主力意图）
-    rise_prob = calc_rise_probability(
-        code, signal_type, news_info, concepts, quote,
-        news_list=news_list, industry=industry, klines=klines,
-    )
+    today_volume = float(quote.get('volume', 0))
+
+    technical    = calc_target_price(klines, current_price)
+    trend        = calc_trend_strength(klines)
+    market_pos   = calc_market_position(code, klines, today_volume)
+    success_rate = calc_success_rate(klines, technical, trend, market_pos, capital)
+    cap_ok       = _capital_confirmed(capital)
+
+    # 综合建议
+    if not technical['space_ok']:
+        verdict = '空间不足'
+    elif trend['level'] == '弱':
+        verdict = '趋势偏弱'
+    else:
+        verdict = '达标'
 
     return {
-        'code': code,
-        'name': name,
-        'industry': industry,
-        'concepts': concepts,
-        'quote': quote,
-        'news': news_list,
-        'news_info': news_info,
-        'rise_probability': rise_prob,
+        'code': code, 'name': name, 'industry': industry, 'concepts': concepts,
+        'quote': quote, 'capital': capital,
+        'technical': technical, 'trend': trend, 'market_pos': market_pos,
+        'success_rate': success_rate,
+        'capital_confirmed': cap_ok, 'verdict': verdict, 'signal_type': signal_type,
     }
 
 
-# ==================== 3. 格式化输出 ====================
+# ==================== 7. 格式化输出 ====================
+
+_GRADE_TAG = {'S': '[S级]', 'A': '[A级]', 'B': '[B级]', 'C': '[C级]', 'D': '[D级]'}
+_GRADE_DESC = {
+    'S': '强烈推荐，多维度共振',
+    'A': '推荐，大部分维度良好',
+    'B': '一般，可关注',
+    'C': '偏弱，谨慎',
+    'D': '不建议',
+}
 
 
-def _get_probability_indicator(probability: float) -> str:
-    """根据概率返回带 emoji 的标识"""
-    if probability >= 80:
-        return f"🔴 {probability}% (很高)"  # 红色圆
-    elif probability >= 65:
-        return f"🟠 {probability}% (较高)"  # 橙色圆
-    elif probability >= 50:
-        return f"🟡 {probability}% (中等)"  # 黄色圆
-    elif probability >= 35:
-        return f"🔵 {probability}% (较低)"  # 蓝色圆
-    else:
-        return f"🟢 {probability}% (低)"  # 绿色圆
+def format_analysis_report(result: AnalysisResult) -> str:
+    code      = result['code']
+    name      = result['name']
+    industry  = result.get('industry', '')
+    concepts  = result.get('concepts', [])
+    quote     = result.get('quote', {})
+    capital   = result.get('capital', {})
+    tech      = result.get('technical', {})
+    trend     = result.get('trend', {})
+    mkt_pos   = result.get('market_pos', {})
+    sr        = result.get('success_rate', {})
+    verdict   = result.get('verdict', '')
 
-def format_analysis_report(result: Dict) -> str:
-    code = result['code']
-    name = result['name']
-    industry = result.get('industry', '')
-    concepts = result.get('concepts', [])
-    quote = result.get('quote', {})
-    news_list = result.get('news', [])
-    news_info = result.get('news_info', {})
+    lines: List[str] = ['']
+    sep = '=' * 62
+    lines.append(f"  {sep}")
 
-    lines = []
-    lines.append(f"")
-    lines.append(f"  {'=' * 56}")
-    lines.append(f"  {code} {name}")
-    lines.append(f"  {'=' * 56}")
+    verdict_tag = {
+        '达标':   '[★ 达标]',
+        '空间不足': '[  空间不足]',
+        '趋势偏弱': '[  趋势偏弱]',
+    }.get(verdict, f'[{verdict}]')
+
+    # 成功率等级放标题行
+    grade     = sr.get('grade', '?')
+    sr_score  = sr.get('score', 0.0)
+    grade_tag = _GRADE_TAG.get(grade, f'[{grade}]')
+    lines.append(f"  {code} {name}  {verdict_tag}  {grade_tag} {sr_score:.0f}分")
+    lines.append(f"  {sep}")
 
     # 实时行情
     if quote:
-        price = quote.get('price', 0)
         chg = quote.get('change_pct', 0)
-        chg_str = f"+{chg}%" if chg >= 0 else f"{chg}%"
-        lines.append(f"  现价: {price}  涨跌: {chg_str}  "
-                      f"今开: {quote.get('open',0)}  "
-                      f"最高: {quote.get('high',0)}  最低: {quote.get('low',0)}")
+        chg_str = f"+{chg:.2f}%" if chg >= 0 else f"{chg:.2f}%"
+        lines.append(
+            f"  现价: {quote.get('price', 0):.2f}  涨跌: {chg_str}  "
+            f"今开: {quote.get('open', 0):.2f}  "
+            f"高: {quote.get('high', 0):.2f}  低: {quote.get('low', 0):.2f}"
+        )
 
-    # 行业
-    lines.append(f"")
-    lines.append(f"  【行业】{industry if industry else '未知'}")
+    # 目标价
+    if tech:
+        gain    = tech.get('expected_gain_pct', 0)
+        sl_pct  = tech.get('stop_loss_pct', 0)
+        space_tag = '  [空间达标]' if tech.get('space_ok') else '  [空间不足]'
+        lines.append('')
+        lines.append(
+            f"  【目标价】 {tech.get('target_price', 0):.2f}"
+            f"  预期涨幅: +{gain:.1f}%{space_tag}"
+        )
+        lines.append(
+            f"  【止损价】 {tech.get('stop_loss', 0):.2f}"
+            f"  止损幅度: {sl_pct:.1f}%"
+            f"  ATR: {tech.get('atr', 0):.3f}"
+        )
+        methods = tech.get('method_targets', {})
+        if methods:
+            method_str = '  '.join(f"{k}: {v:.2f}" for k, v in methods.items())
+            lines.append(f"  【测算明细】{method_str}")
 
-    # 概念
-    if concepts:
-        lines.append(f"  【概念】{', '.join(concepts[:15])}")
-        if len(concepts) > 15:
-            lines.append(f"          ...共{len(concepts)}个")
+    # 成功率
+    if sr:
+        grade    = sr.get('grade', '?')
+        sr_score = sr.get('score', 0.0)
+        desc     = _GRADE_DESC.get(grade, '')
+        bar      = '█' * int(sr_score / 5) + '░' * (20 - int(sr_score / 5))
+        lines.append('')
+        lines.append(f"  【成功率】{bar} {sr_score:.0f}分  {grade_tag} {desc}")
+        lines.append(
+            f"    突破质量 {sr.get('dim_breakout', 0):.0f}  "
+            f"趋势动能 {sr.get('dim_momentum', 0):.0f}  "
+            f"相对强度 {sr.get('dim_rs', 0):.0f}  "
+            f"资金持续 {sr.get('dim_capital', 0):.0f}  "
+            f"风险收益 {sr.get('dim_rr', 0):.0f}"
+        )
+
+    # 趋势强度
+    if trend:
+        score  = trend.get('score', 0)
+        level  = trend.get('level', '')
+        detail = trend.get('detail', {})
+        ma_tag  = 'OK' if trend.get('ma_align')      else '--'
+        vp_tag  = 'OK' if trend.get('vol_price_ok')  else '--'
+        mac_tag = 'OK' if trend.get('macd_positive') else '--'
+        bar = '█' * int(score / 5) + '░' * (20 - int(score / 5))
+        lines.append('')
+        lines.append(f"  【趋势强度】{bar} {score:.1f}  ({level})")
+        lines.append(
+            f"    均线排列[{ma_tag}] {detail.get('ma_align', 0):.0f}分  "
+            f"量价配合[{vp_tag}] {detail.get('vol_price', 0):.0f}分  "
+            f"MACD动量[{mac_tag}] {detail.get('macd', 0):.0f}分"
+        )
+
+    # 市场位置
+    if mkt_pos:
+        mp_score = mkt_pos.get('score', 50.0)
+        mp_level = mkt_pos.get('level', '')
+        rs_val   = mkt_pos.get('relative_strength', 0.0)
+        rs_score = mkt_pos.get('rs_score', 50.0)
+        vr_val   = mkt_pos.get('vol_ratio', 1.0)
+        vr_score = mkt_pos.get('vr_score', 50.0)
+        bm_name  = mkt_pos.get('benchmark_name', '')
+        rs_str   = f"+{rs_val:.2f}%" if rs_val >= 0 else f"{rs_val:.2f}%"
+        bar = '█' * int(mp_score / 5) + '░' * (20 - int(mp_score / 5))
+        lines.append('')
+        lines.append(f"  【市场位置】{bar} {mp_score:.1f}  ({mp_level})")
+        lines.append(
+            f"    相对强度[vs {bm_name}] {rs_str}  {rs_score:.0f}分  "
+            f"量比 {vr_val:.2f}x  {vr_score:.0f}分"
+        )
+
+    # 主力资金
+    if capital:
+        main_in = capital.get('main_net_in', 0)
+        flow    = capital.get('flow_ratio', 0)
+        dir_tag = f'今日主力净买入 +{main_in:.0f}万' if main_in > 0 else f'今日主力净卖出 {main_in:.0f}万'
+        flow_tag = f'  占成交额 {flow:+.2f}%'
     else:
-        lines.append(f"  【概念】无")
+        dir_tag, flow_tag = '资金数据获取失败', ''
+    lines.append(f"  【主力资金】{dir_tag}{flow_tag}")
 
-    # 新闻
-    lines.append(f"")
-    sentiment = news_info.get('sentiment', '中性')
-    hot = news_info.get('hot_keywords', [])
-    hot_str = f"  热点: {', '.join(hot)}" if hot else ""
-    lines.append(f"  【新闻】情绪{sentiment}  "
-                  f"(正面{news_info.get('positive',0)}条 / 负面{news_info.get('negative',0)}条)"
-                  f"{hot_str}")
-    for i, n in enumerate(news_list[:5]):
-        title = n.get('title', '')
-        if len(title) > 50:
-            title = title[:50] + '...'
-        src = n.get('source', '')
-        date = n.get('date', '')
-        prefix = f"[{date}]" if date else f"[{src}]"
-        lines.append(f"    {i+1}. {prefix} {title}")
+    # 行业 & 概念
+    lines.append('')
+    lines.append(f"  【行业】{industry if industry else '未知'}")
+    if concepts:
+        lines.append(
+            f"  【概念】{', '.join(concepts[:10])}"
+            + (f" 等{len(concepts)}个" if len(concepts) > 10 else "")
+        )
 
-    # 上涨概率
-    rise_prob = result.get('rise_probability', {})
-    if rise_prob:
-        prob = rise_prob.get('probability', 0)
-        level = rise_prob.get('level', '未知')
-        factors = rise_prob.get('factors', {})
-
-        lines.append(f"")
-        lines.append(f"")
-        prob_text = _get_probability_indicator(prob)
-        lines.append(f"  【上涨概率】 {prob_text}")
-        lines.append(f"  {'-' * 50}")
-
-        factor_names = {
-            'news_sentiment': '新闻情绪',
-            'news_attention': '新闻关注',
-            'concept_heat':   '板块热度',
-            'industry_trend': '行业景气',
-            'market_env':     '大盘环境',
-            'zhuli_intent':   '主力意图',
-        }
-        for key in ('news_sentiment', 'news_attention', 'concept_heat',
-                     'industry_trend', 'market_env', 'zhuli_intent'):
-            if key in factors:
-                score, weight = factors[key]
-                bar_len = int(score / 5)  # 0~20格
-                bar = '█' * bar_len + '░' * (20 - bar_len)
-                lines.append(f"    {factor_names[key]:<8} {bar} {score:>5.1f}  (权重{int(weight*100)}%)")
-
-    lines.append(f"  {'=' * 56}")
-    lines.append(f"")
-
+    lines.append(f"  {sep}")
+    lines.append('')
     return "\n".join(lines)
 
 
-# ==================== 4. 批量分析 ====================
+# ==================== 8. 批量分析 ====================
 
-def analyze_stocks_batch(stocks: List[Tuple[str, str]], signal_types: Dict[str, str] = None) -> List[Dict]:
-    """批量分析
-    stocks: [(code, name), ...]
-    signal_types: {code: signal_type} 可选
-    """
+def analyze_stocks_batch(stocks: List[Tuple[str, str]],
+                          signal_types: Optional[Dict[str, str]] = None) -> List[AnalysisResult]:
     if not stocks:
         return []
-
     if signal_types is None:
         signal_types = {}
 
-    print(f"\n{'=' * 60}")
-    print(f"  基本面分析（行业 / 概念 / 新闻 / 上涨概率）")
+    print(f"\n{'=' * 66}")
+    print("  目标导向分析（短期涨幅 ≥10% 筛选）")
     print(f"  待分析: {len(stocks)} 只")
-    print(f"{'=' * 60}")
+    print(f"{'=' * 66}")
 
-    results = []
+    results: List[AnalysisResult] = []
     for i, (code, name) in enumerate(stocks):
         print(f"\n  [{i+1}/{len(stocks)}] 正在分析 {code} {name} ...")
         try:
-            sig = signal_types.get(code, '')
-            r = analyze_stock(code, name, signal_type=sig)
-            r['signal_type'] = sig
+            r = analyze_stock(code, name, signal_type=signal_types.get(code, ''))
             results.append(r)
             print(format_analysis_report(r))
         except Exception as e:
+            logger.error(f"分析失败 {code}: {e}")
             print(f"    分析失败: {e}")
-            results.append({
-                'code': code, 'name': name,
-                'signal_type': signal_types.get(code, ''),
+            results.append({  # type: ignore[misc]
+                'code': code, 'name': name, 'signal_type': signal_types.get(code, ''),
+                'industry': '', 'concepts': [], 'quote': {}, 'capital': {},
+                'technical': {}, 'trend': {}, 'market_pos': {},
+                'capital_confirmed': False, 'verdict': '失败',
             })
 
         if i < len(stocks) - 1:
             time.sleep(0.3)
 
+    ok     = [r for r in results if r.get('verdict') == '达标']
+    not_ok = [r for r in results if r.get('verdict') != '达标']
+
+    # 达标股票按成功率降序排列
+    ok_sorted = sorted(ok, key=lambda r: r.get('success_rate', {}).get('score', 0), reverse=True)
+
+    print(f"\n{'=' * 66}")
+    print(f"  分析完成  达标: {len(ok)} 只  不达标: {len(not_ok)} 只")
+    if ok_sorted:
+        print(f"  {'─' * 60}")
+        print(f"  达标股票（按成功率排序）:")
+        for r in ok_sorted:
+            t   = r.get('technical', {})
+            tr  = r.get('trend', {})
+            mp  = r.get('market_pos', {})
+            sr  = r.get('success_rate', {})
+            rs_val  = mp.get('relative_strength', 0.0)
+            rs_str  = f"+{rs_val:.1f}%" if rs_val >= 0 else f"{rs_val:.1f}%"
+            grade   = sr.get('grade', '?')
+            sr_sc   = sr.get('score', 0.0)
+            print(
+                f"    [{grade}级 {sr_sc:.0f}分]  {r['code']} {r['name']:<8}"
+                f"  目标 {t.get('target_price', 0):.2f}"
+                f"  +{t.get('expected_gain_pct', 0):.1f}%"
+                f"  止损 {t.get('stop_loss', 0):.2f}"
+                f"  趋势[{tr.get('level', '?')}]"
+                f"  RS {rs_str}"
+                f"  量比 {mp.get('vol_ratio', 0):.2f}x"
+            )
+    print(f"{'=' * 66}\n")
+
     return results
 
 
-# ==================== 独立运行 ====================
+# ==================== 9. 独立运行 ====================
 
-def main():
-    print()
-    print("=" * 50)
-    print("  个股基本面分析工具")
-    print("  （行业 / 概念 / 新闻 / 上涨概率）")
-    print("=" * 50)
+def main() -> None:
+    print("=" * 62)
+    print("  个股分析工具（目标导向版，短期涨幅 ≥10%）")
+    print("=" * 62)
     print("  输入股票代码（6位），多只用逗号分隔")
     print()
-
     codes_input = input("  请输入股票代码: ").strip()
     if not codes_input:
         return
-
     codes = [c.strip() for c in codes_input.replace('\uff0c', ',').split(',') if c.strip()]
     stocks = [(c, '') for c in codes if len(c) == 6 and c.isdigit()]
-
     if not stocks:
         print("  无有效代码")
         return
-
     analyze_stocks_batch(stocks)
 
 
