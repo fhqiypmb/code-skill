@@ -1,15 +1,28 @@
 """
-个股分析模块 - 目标导向版（短期涨幅 ≥10%）- 改进版本
+个股分析模块 - 目标导向版（短期涨幅 ≥10%）
 
-核心改进：
-  1. ✓ MACD 计算改为标准 EMA 递推（修复 P0）
-  2. ✓ 止损价基于 MA20 和近期波动低点，而非被动最低点（修复 P1）
-  3. ✓ 资金评分改为相对百分比（占成交额比），支持不同市值股票（修复 P1）
-  4. ✓ 均线权重降低到 30%，强化量价 MACD（优化 P2）
-  5. ✓ 相对强度改为 10 日周期，更稳定（优化 P2）
-  6. ✓ 量比评分平滑化，加入量价同向性判断（优化 P3）
-  7. ✓ 加入到达概率维度（新增价值）
-  8. ✓ 数据时间戳验证，确保数据同步（鲁棒性）
+核心逻辑：
+  1. 技术目标价计算（压力位 / ATR通道 / 斐波那契扩展，三法取中）
+  2. 止损价：金叉确认阳线低点（即选股买入区低点）
+  3. 空间判断：目标涨幅 ≥10% 才标记达标，这是最低卖出考量线
+  4. 趋势强度评分（均线排列 + 量价配合 + MACD动量）
+  5. 市场位置评分（个股相对强度50% + 换手率强度50%）
+     - 相对强度：个股涨幅 vs 对应基准指数（上证/深证/创业板/科创板）
+     - 换手率强度：今日成交量 vs 近20日均量（量比）
+  6. 主力资金方向（辅助）
+  7. 成功率评分（优中选优，5个维度）
+     - 突破质量（25%）：金叉信号放量倍数、均线开口、站上MA20
+     - 趋势动能（25%）：MACD方向、均线排列完整度、近期涨速
+     - 相对强度（20%）：跑赢基准指数幅度
+     - 资金持续性（20%）：主力净买入 + 量比共振
+     - 风险收益比（10%）：目标涨幅 / 止损幅度
+
+输出重心：
+  - 现价 / 目标价 / 止损价 / 预期涨幅
+  - 成功率等级（S/A/B/C/D）及各维度得分
+  - 趋势强度（强 / 中 / 弱）
+  - 市场位置（相对强度 + 量比）
+  - 综合建议（达标 / 空间不足 / 趋势偏弱）
 """
 
 import sys
@@ -17,7 +30,6 @@ import time
 import logging
 import concurrent.futures
 from typing import Dict, List, Tuple, Optional, TypedDict
-from datetime import datetime
 
 if sys.platform == 'win32':
     try:
@@ -42,7 +54,6 @@ class TechnicalTarget(TypedDict):
     space_ok: bool
     method_targets: Dict[str, float]
     atr: float
-    ma20: float
 
 
 class TrendStrength(TypedDict):
@@ -51,14 +62,13 @@ class TrendStrength(TypedDict):
     ma_align: bool
     vol_price_ok: bool
     macd_positive: bool
-    macd_strength: float       # MACD 力度评分（新增）
     detail: Dict[str, float]
 
 
 class MarketPosition(TypedDict):
     score: float               # 市场位置总分 [0, 100]
     level: str                 # 强 / 中 / 弱
-    relative_strength: float   # 个股涨幅 - 基准指数涨幅（%，近10日）
+    relative_strength: float   # 个股涨幅 - 基准指数涨幅（%，近5日）
     rs_score: float            # 相对强度评分 [0, 100]
     vol_ratio: float           # 量比（今日量 / 近20日均量）
     vr_score: float            # 量比评分 [0, 100]
@@ -74,7 +84,6 @@ class SuccessRate(TypedDict):
     dim_rs: float              # 相对强度得分 [0,100]
     dim_capital: float         # 资金持续性得分 [0,100]
     dim_rr: float              # 风险收益比得分 [0,100]
-    dim_reach_prob: float      # 到达概率得分 [0,100]（新增）
 
 
 class AnalysisResult(TypedDict):
@@ -93,29 +102,6 @@ class AnalysisResult(TypedDict):
     signal_type: str
 
 
-# ==================== 0. 标准 EMA 计算 ====================
-
-def _standard_ema(data: List[float], period: int) -> List[float]:
-    """
-    标准 EMA 计算：第一个 period 项求 SMA，之后按 EMA 公式递推。
-    这是 TA-Lib 兼容的实现。
-    """
-    if len(data) < period:
-        return data
-    
-    result = []
-    # 前 period 项求简单平均作为初值
-    ema_val = sum(data[:period]) / period
-    result.append(ema_val)
-    
-    k = 2.0 / (period + 1)
-    for i in range(period, len(data)):
-        ema_val = data[i] * k + ema_val * (1 - k)
-        result.append(ema_val)
-    
-    return result
-
-
 # ==================== 1. 技术目标价计算 ====================
 
 def _calc_atr(klines: List[KLineBar], period: int = 14) -> float:
@@ -130,11 +116,6 @@ def _calc_atr(klines: List[KLineBar], period: int = 14) -> float:
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         trs.append(tr)
     return sum(trs) / len(trs) if trs else 0.0
-
-
-def _ma(closes: List[float], n: int) -> Optional[float]:
-    """计算简单移动平均"""
-    return sum(closes[-n:]) / n if len(closes) >= n else None
 
 
 def _resistance_target(klines: List[KLineBar], current: float, lookback: int = 60) -> float:
@@ -163,12 +144,7 @@ def _fib_extension_target(klines: List[KLineBar], current: float, lookback: int 
 
 
 def calc_target_price(klines: List[KLineBar], current_price: float) -> TechnicalTarget:
-    """
-    改进版本：
-    - 三法取中位数计算目标价
-    - 止损价基于 MA20 + ATR 的科学方法（而非被动最低点）
-    - 限制在 [current*1.05, current*1.40] 范围
-    """
+    """三法取中位数计算目标价，限制在 [current*1.05, current*1.40]"""
     if not klines or current_price <= 0:
         return {
             'current_price': current_price,
@@ -179,7 +155,6 @@ def calc_target_price(klines: List[KLineBar], current_price: float) -> Technical
             'space_ok': True,
             'method_targets': {},
             'atr': 0.0,
-            'ma20': 0.0,
         }
 
     atr = _calc_atr(klines)
@@ -192,23 +167,8 @@ def calc_target_price(klines: List[KLineBar], current_price: float) -> Technical
     target = min(target, current_price * 1.40)
     target = round(target, 2)
 
-    # ========== 改进：科学的止损价设置 ==========
-    # 方法1：MA20 作为支撑基础
-    closes = [float(k['close']) for k in klines]
-    ma20 = _ma(closes, 20)
-    if ma20 is None:
-        ma20 = current_price * 0.95
-    
-    # 方法2：近 5 日最低点
     recent5 = klines[-5:] if len(klines) >= 5 else klines
-    swing_low_5d = min(float(k['low']) for k in recent5)
-    
-    # 方法3：MA20 下方 0.5 倍 ATR（考虑正常波动）
-    stop_by_atr = max(ma20 * 0.98, ma20 - atr * 0.5) if atr > 0 else ma20
-    
-    # 取三者中的最高值（最安全）
-    stop = max(ma20 * 0.95, swing_low_5d, stop_by_atr)
-    stop = min(stop, current_price * 0.88)  # 不超过 12% 的止损
+    stop = max(min(float(k['low']) for k in recent5), current_price * 0.85)
     stop = round(stop, 2)
 
     expected_gain = round((target - current_price) / current_price * 100, 1)
@@ -227,33 +187,28 @@ def calc_target_price(klines: List[KLineBar], current_price: float) -> Technical
             '斐波那契': round(t_f, 2),
         },
         'atr': round(atr, 3),
-        'ma20': round(ma20, 2),
     }
 
 
 # ==================== 2. 趋势强度评分 ====================
 
+def _ma(closes: List[float], n: int) -> Optional[float]:
+    return sum(closes[-n:]) / n if len(closes) >= n else None
+
+
 def calc_trend_strength(klines: List[KLineBar]) -> TrendStrength:
-    """
-    改进版本：
-    - 均线权重降低到 30%（而非 40%）
-    - 量价权重升高到 40%（而非 35%）
-    - MACD 权重保持 30%（而非 25%）
-    - 加入量价同向性判断
-    - 加入 MACD 力度评分
-    """
+    """均线排列(40%) + 量价配合(35%) + MACD动量(25%)"""
     if not klines or len(klines) < 35:
         return {
             'score': 50.0, 'level': '中',
             'ma_align': False, 'vol_price_ok': False, 'macd_positive': False,
-            'macd_strength': 50.0,
             'detail': {'ma_align': 50.0, 'vol_price': 50.0, 'macd': 50.0},
         }
 
     closes  = [float(k['close']) for k in klines]
     volumes = [float(k['volume']) for k in klines]
 
-    # ---- 均线排列（权重 30%） ----
+    # ---- 均线排列 ----
     ma5  = _ma(closes, 5)
     ma10 = _ma(closes, 10)
     ma20 = _ma(closes, 20)
@@ -273,7 +228,7 @@ def calc_trend_strength(klines: List[KLineBar]) -> TrendStrength:
     if ma20 and closes[-1] > ma20:
         ma_score = min(ma_score + 10, 100.0)
 
-    # ---- 量价配合（权重 40%） ----
+    # ---- 量价配合 ----
     recent10 = klines[-10:] if len(klines) >= 10 else klines
     up_bars   = [k for k in recent10 if float(k['close']) > float(k['open'])]
     down_bars = [k for k in recent10 if float(k['close']) < float(k['open'])]
@@ -285,99 +240,57 @@ def calc_trend_strength(klines: List[KLineBar]) -> TrendStrength:
     avg_vol_20 = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else avg_vol_5
     vol_trend  = avg_vol_5 / avg_vol_20  if avg_vol_20 > 0 else 1.0
 
-    # 改进：加入价格同向性判断
-    price_trend = closes[-1] / closes[-5] if len(closes) >= 5 else 1.0
-    is_price_up = price_trend > 1.0
-
     vp_score = 50.0
-    # 平滑化评分（避免剧烈跳跃）
-    if vp_ratio >= 2.5:   vp_score += 30
-    elif vp_ratio >= 2.0: vp_score += 22
-    elif vp_ratio >= 1.5: vp_score += 16
-    elif vp_ratio >= 1.2: vp_score += 8
-    elif vp_ratio < 0.8:  vp_score -= 15
-    elif vp_ratio < 0.6:  vp_score -= 25
-
-    # 量价同向性加分（价升+放量 或 价跌+缩量）
-    if (is_price_up and vol_trend >= 1.2) or (not is_price_up and vol_trend < 0.9):
-        vp_score += 12
-    elif (is_price_up and vol_trend < 0.8) or (not is_price_up and vol_trend >= 1.3):
-        vp_score -= 12
-
-    if vol_trend >= 1.3:   vp_score += 10
-    elif vol_trend >= 1.1: vp_score += 5
-    elif vol_trend < 0.7:  vp_score -= 8
-
+    if vp_ratio >= 2.0:   vp_score += 35
+    elif vp_ratio >= 1.5: vp_score += 20
+    elif vp_ratio >= 1.2: vp_score += 10
+    elif vp_ratio < 0.8:  vp_score -= 20
+    if vol_trend >= 1.5:   vp_score += 15
+    elif vol_trend >= 1.1: vp_score += 8
+    elif vol_trend < 0.7:  vp_score -= 10
     vp_score = max(0.0, min(100.0, vp_score))
-    vol_price_ok = vp_ratio >= 1.2 and vol_trend >= 0.9
+    vol_price_ok = vp_ratio >= 1.2
 
-    # ---- MACD 动量（权重 30%）- 改用标准 EMA ----
+    # ---- MACD 动量 ----
+    def _ema(data: List[float], period: int) -> List[float]:
+        k = 2 / (period + 1)
+        r = [data[0]]
+        for v in data[1:]:
+            r.append(v * k + r[-1] * (1 - k))
+        return r
+
     macd_score = 50.0
-    macd_strength = 50.0
     macd_positive = False
-
-    if len(closes) >= 35:  # 确保有足够数据
-        # 使用标准 EMA 计算
-        ema12 = _standard_ema(closes, 12)
-        ema26 = _standard_ema(closes, 26)
-        
-        # 对齐长度
-        min_len = min(len(ema12), len(ema26))
-        ema12 = ema12[-min_len:]
-        ema26 = ema26[-min_len:]
-        
+    if len(closes) >= 26:
+        ema12 = _ema(closes, 12)
+        ema26 = _ema(closes, 26)
         dif = [a - b for a, b in zip(ema12, ema26)]
-        dea = _standard_ema(dif, 9) if len(dif) >= 9 else dif
-
-        curr_dif = dif[-1]
-        curr_dea = dea[-1] if isinstance(dea, list) else dea
+        dea = _ema(dif, 9) if len(dif) >= 9 else dif
+        curr_dif, curr_dea = dif[-1], dea[-1]
         prev_dif = dif[-2] if len(dif) >= 2 else curr_dif
-
-        # MACD 正向判断
         if curr_dif > 0 and curr_dea > 0:
-            macd_score, macd_positive = 85.0, True
-            macd_strength = 90.0
-        elif curr_dif > 0 and curr_dea <= 0:
-            macd_score, macd_positive = 70.0, True
-            macd_strength = 70.0
+            macd_score, macd_positive = 80.0, True
         elif curr_dif > 0:
             macd_score, macd_positive = 65.0, True
-            macd_strength = 65.0
         elif curr_dif <= 0 and curr_dea <= 0:
             macd_score = 25.0
-            macd_strength = 20.0
-        else:
-            macd_score = 40.0
-            macd_strength = 40.0
+        macd_score += 15 if curr_dif > prev_dif else -10
+        macd_score = max(0.0, min(100.0, macd_score))
 
-        # DIF 上升趋势加分（动能方向）
-        dif_accel = curr_dif - prev_dif
-        if dif_accel > 0:
-            macd_score = min(macd_score + 12, 100.0)
-            macd_strength = min(macd_strength + 12, 100.0)
-        else:
-            macd_score = max(macd_score - 8, 0.0)
-            macd_strength = max(macd_strength - 8, 0.0)
-
-    # ========== 改进：权重调整 ==========
-    total = round(ma_score * 0.30 + vp_score * 0.40 + macd_score * 0.30, 1)
+    total = round(ma_score * 0.40 + vp_score * 0.35 + macd_score * 0.25, 1)
     total = max(0.0, min(100.0, total))
     level = '强' if total >= 70 else ('中' if total >= 45 else '弱')
 
     return {
         'score': total, 'level': level,
         'ma_align': ma_align, 'vol_price_ok': vol_price_ok, 'macd_positive': macd_positive,
-        'macd_strength': round(macd_strength, 1),
-        'detail': {
-            'ma_align': round(ma_score, 1),
-            'vol_price': round(vp_score, 1),
-            'macd': round(macd_score, 1),
-        },
+        'detail': {'ma_align': round(ma_score, 1), 'vol_price': round(vp_score, 1), 'macd': round(macd_score, 1)},
     }
 
 
 # ==================== 3. 市场位置（相对强度 + 量比） ====================
 
+# 基准指数映射：按股票代码前缀匹配
 _BENCHMARK_MAP: Dict[str, Tuple[str, str]] = {
     '30': ('399006', '创业板指'),
     '68': ('000688', '科创50'),
@@ -396,32 +309,31 @@ def _get_benchmark(code: str) -> Tuple[str, str]:
 def _score_relative_strength(klines: List[KLineBar],
                               benchmark_code: str) -> Tuple[float, float]:
     """
-    改进版本：
-    - 改为 10 日周期（而非 5 日），更稳定
-    - 避免短期波动干扰
+    个股相对强度评分。
+    用个股近5日涨幅 - 基准指数近5日涨幅，差值即相对强度。
+    返回 (评分[0,100], 相对强度%)
     """
-    if not klines or len(klines) < 11:
+    if not klines or len(klines) < 6:
         return 50.0, 0.0
     try:
-        idx_klines = data_source.fetch_index_kline(benchmark_code, 30)
-        if not idx_klines or len(idx_klines) < 11:
+        idx_klines = data_source.fetch_index_kline(benchmark_code, 15)
+        if not idx_klines or len(idx_klines) < 6:
             return 50.0, 0.0
     except Exception:
         return 50.0, 0.0
 
     stock_closes = [float(k['close']) for k in klines]
-    stock_chg10 = (stock_closes[-1] - stock_closes[-11]) / stock_closes[-11] * 100
+    stock_chg5 = (stock_closes[-1] - stock_closes[-6]) / stock_closes[-6] * 100
 
     idx_closes = [k['close'] for k in idx_klines]
-    idx_chg10 = (idx_closes[-1] - idx_closes[-11]) / idx_closes[-11] * 100
+    idx_chg5 = (idx_closes[-1] - idx_closes[-6]) / idx_closes[-6] * 100
 
-    rs = round(stock_chg10 - idx_chg10, 2)
+    rs = round(stock_chg5 - idx_chg5, 2)
 
-    # 改进：评分更平缓
-    if rs >= 12:    score = 100.0
-    elif rs >= 8:   score = 85.0
-    elif rs >= 4:   score = 70.0
-    elif rs >= 1:   score = 55.0
+    if rs >= 10:    score = 100.0
+    elif rs >= 5:   score = 85.0
+    elif rs >= 2:   score = 70.0
+    elif rs >= 0:   score = 55.0
     elif rs >= -2:  score = 40.0
     elif rs >= -5:  score = 25.0
     else:           score = 10.0
@@ -431,9 +343,9 @@ def _score_relative_strength(klines: List[KLineBar],
 
 def _score_vol_ratio(klines: List[KLineBar], today_volume: float) -> Tuple[float, float]:
     """
-    改进版本：
-    - 量比评分平滑化
-    - 加入合理性检查
+    量比评分（换手率强度近似）。
+    量比 = 今日成交量 / 近20日日均成交量。
+    返回 (评分[0,100], 量比)
     """
     if not klines or len(klines) < 5:
         return 50.0, 1.0
@@ -446,17 +358,13 @@ def _score_vol_ratio(klines: List[KLineBar], today_volume: float) -> Tuple[float
     vol = today_volume if today_volume > 0 else float(klines[-1]['volume'])
     vr = round(vol / avg_vol, 2)
 
-    # 改进：评分平滑化（避免剧烈跳跃）
-    if vr >= 3.5:    score = 100.0
-    elif vr >= 2.5:  score = 88.0
-    elif vr >= 2.0:  score = 76.0
-    elif vr >= 1.5:  score = 64.0
-    elif vr >= 1.2:  score = 55.0
-    elif vr >= 1.0:  score = 48.0
-    elif vr >= 0.8:  score = 40.0
-    elif vr >= 0.6:  score = 28.0
-    elif vr >= 0.5:  score = 18.0
-    else:            score = 8.0
+    if vr >= 3.0:    score = 95.0
+    elif vr >= 2.0:  score = 80.0
+    elif vr >= 1.5:  score = 68.0
+    elif vr >= 1.0:  score = 55.0
+    elif vr >= 0.7:  score = 38.0
+    elif vr >= 0.5:  score = 22.0
+    else:            score = 10.0
 
     return round(score, 1), vr
 
@@ -483,72 +391,7 @@ def calc_market_position(code: str, klines: List[KLineBar],
     }
 
 
-# ==================== 4. 到达概率评分（新增维度） ====================
-
-def _calc_reach_probability(klines: List[KLineBar], target: float,
-                             current: float, stop_loss: float) -> Tuple[float, float]:
-    """
-    估算目标价的到达概率。
-    基于：
-    - 历史突破率（近 60 日内有多少次突破过相似高度）
-    - 空间与止损的比例（比例越合理越容易到达）
-    - 近期波动范围（波动越大越容易触及极值）
-    """
-    if not klines or len(klines) < 20 or target <= current:
-        return 60.0, 1.0
-
-    closes = [float(k['close']) for k in klines]
-    highs = [float(k['high']) for k in klines]
-
-    # 因子1：历史突破率（近 60 日）
-    recent60 = klines[-60:] if len(klines) >= 60 else klines
-    swing_high = max(float(k['high']) for k in recent60)
-    
-    # 目标价距离当前价的相对高度
-    target_height = (target - current) / current * 100
-    swing_height = (swing_high - current) / current * 100
-
-    if swing_height > 0:
-        # 如果历史上达到过目标价高度或更高，概率高
-        breakout_rate = min(target_height / swing_height, 1.0) * 100
-    else:
-        breakout_rate = 50.0
-
-    # 因子2：风险收益比合理性
-    rr = (target - current) / abs(current - stop_loss) if current != stop_loss else 2.0
-    if rr >= 2.0:      rr_factor = 100.0  # 收益 ≥ 2 倍风险，容易触及
-    elif rr >= 1.5:    rr_factor = 85.0
-    elif rr >= 1.0:    rr_factor = 70.0
-    elif rr >= 0.5:    rr_factor = 50.0
-    else:              rr_factor = 30.0
-
-    # 因子3：近期波动范围（5 日）
-    if len(closes) >= 5:
-        recent_vol = (max(closes[-5:]) - min(closes[-5:])) / current * 100
-        vol_factor = min(target_height / max(recent_vol, 1.0) * 50, 100.0)
-    else:
-        vol_factor = 60.0
-
-    # 综合概率（加权）
-    reach_prob = breakout_rate * 0.4 + rr_factor * 0.35 + vol_factor * 0.25
-    reach_prob = round(max(10.0, min(95.0, reach_prob)), 1)
-
-    return reach_prob, rr
-
-
-def calc_reach_probability_score(klines: List[KLineBar], technical: TechnicalTarget) -> float:
-    """将到达概率转为 0-100 的评分"""
-    reach_prob, _ = _calc_reach_probability(
-        klines,
-        technical['target_price'],
-        technical['current_price'],
-        technical['stop_loss']
-    )
-    # 直接使用概率作为评分
-    return round(reach_prob, 1)
-
-
-# ==================== 5. 成功率评分（优中选优）- 改进版 ====================
+# ==================== 4. 成功率评分（优中选优） ====================
 
 def calc_success_rate(
     klines: List[KLineBar],
@@ -558,129 +401,112 @@ def calc_success_rate(
     capital: CapitalFlow,
 ) -> SuccessRate:
     """
-    改进版本：
-    - 突破质量维度更关注放量和均线
-    - 趋势动能结合 MACD 强度
-    - 资金持续性改为百分比评分（支持不同市值）
-    - 加入到达概率维度
-    
-    维度权重（6维）：
-      突破质量  22% — 信号本身的可靠性
-      趋势动能  22% — 趋势能否持续推动到目标价
-      相对强度  18% — 主力是否专注拉升这只
-      资金持续性 20% — 资金是否持续流入
-      风险收益比  10% — 同样涨10%，亏损空间越小越好
-      到达概率   8% — 历史上有多容易突破到目标
-    
+    5维度成功率评分 [0,100]，用于达标股票间的优先级排序。
+
+    维度权重：
+      突破质量  25% —— 信号本身的可靠性
+      趋势动能  25% —— 趋势能否持续推动到目标价
+      相对强度  20% —— 主力是否专注拉升这只
+      资金持续性 20% —— 资金是否持续流入
+      风险收益比 10% —— 同样涨10%，亏损空间越小越好
+
     等级：S≥80 / A≥65 / B≥50 / C≥35 / D<35
     """
     closes  = [float(k['close']) for k in klines] if klines else []
     volumes = [float(k['volume']) for k in klines] if klines else []
 
     # ── 维度1：突破质量 ──────────────────────────────────────────
-    bk_score = 40.0
+    # 衡量金叉信号发出时的力度：放量倍数、均线多头、价格站上MA20
+    bk_score = 40.0  # 基础分
 
-    # 放量倍数（最近5日 vs 20日均量）
+    # 近5日成交量 vs 近20日均量（放量倍数）
     if len(volumes) >= 20:
         avg20 = sum(volumes[-20:]) / 20
         avg5  = sum(volumes[-5:]) / 5
         vol_mult = avg5 / avg20 if avg20 > 0 else 1.0
-        if vol_mult >= 2.5:   bk_score += 32
-        elif vol_mult >= 2.0: bk_score += 24
-        elif vol_mult >= 1.5: bk_score += 16
-        elif vol_mult >= 1.2: bk_score += 8
-        elif vol_mult >= 1.0: bk_score += 3
+        if vol_mult >= 2.5:   bk_score += 35
+        elif vol_mult >= 1.8: bk_score += 25
+        elif vol_mult >= 1.3: bk_score += 15
+        elif vol_mult >= 1.0: bk_score += 5
         else:                 bk_score -= 10
 
     # 均线多头加分
     if trend.get('ma_align'):
-        bk_score += 18
+        bk_score += 20
 
-    # 价格站上 MA20
-    if technical.get('current_price', 0) > technical.get('ma20', 0):
+    # 价格站上MA20（已在趋势里计算，直接复用）
+    ma20_score = trend.get('detail', {}).get('ma_align', 50.0)
+    if ma20_score >= 80:
         bk_score += 5
 
     bk_score = max(0.0, min(100.0, bk_score))
 
     # ── 维度2：趋势动能 ──────────────────────────────────────────
-    # 复用趋势强度，但加入 MACD 强度权重
-    mo_score = trend.get('score', 50.0) * 0.7
-    mo_score += trend.get('macd_strength', 50.0) * 0.3
+    # 直接复用趋势强度总分，但对MACD正向额外加权
+    mo_score = trend.get('score', 50.0)
+    if trend.get('macd_positive'):
+        mo_score = min(mo_score + 10, 100.0)
 
-    # 近10日价格动量
-    if len(closes) >= 11:
-        chg10 = (closes[-1] - closes[-11]) / closes[-11] * 100
-        if 4 <= chg10 <= 18:    mo_score = min(mo_score + 12, 100.0)
-        elif chg10 > 25:        mo_score = max(mo_score - 18, 0.0)  # 追高风险
-        elif chg10 < -3:        mo_score = max(mo_score - 15, 0.0)
+    # 近10日价格动量（稳步上涨 vs 剧烈震荡）
+    if len(closes) >= 10:
+        chg10 = (closes[-1] - closes[-11]) / closes[-11] * 100 if len(closes) >= 11 else 0
+        # 稳健涨幅5~15%加分，涨太多反而追高风险高
+        if 5 <= chg10 <= 15:    mo_score = min(mo_score + 10, 100.0)
+        elif chg10 > 25:        mo_score = max(mo_score - 15, 0.0)
+        elif chg10 < 0:         mo_score = max(mo_score - 10, 0.0)
 
     mo_score = max(0.0, min(100.0, mo_score))
 
     # ── 维度3：相对强度 ──────────────────────────────────────────
+    # 直接复用市场位置里的相对强度评分
     rs_score = market_pos.get('rs_score', 50.0)
 
     # ── 维度4：资金持续性 ─────────────────────────────────────────
-    # 改进：改为百分比评分，而非绝对值
+    # 主力净买入 + 量比共振
     main_in    = capital.get('main_net_in', 0.0)
-    trade_vol  = capital.get('trade_value', 1.0)  # 成交额（万元）
     flow_ratio = capital.get('flow_ratio', 0.0)
+    vr         = market_pos.get('vol_ratio', 1.0)
 
     cap_score = 40.0
-
-    # 主力净买入占成交额比例（%）
-    if trade_vol > 0:
-        main_ratio = (main_in / trade_vol) * 100
-    else:
-        main_ratio = 0
-
-    if main_ratio > 8:      cap_score += 35
-    elif main_ratio > 4:    cap_score += 25
-    elif main_ratio > 1:    cap_score += 15
-    elif main_ratio > 0:    cap_score += 5
-    elif main_ratio > -2:   cap_score += 0
-    elif main_ratio > -5:   cap_score -= 15
-    else:                   cap_score -= 25
+    # 主力净买入方向
+    if main_in > 5000:    cap_score += 35
+    elif main_in > 2000:  cap_score += 25
+    elif main_in > 500:   cap_score += 15
+    elif main_in > 0:     cap_score += 5
+    elif main_in < -2000: cap_score -= 25
+    elif main_in < 0:     cap_score -= 10
 
     # 净流入占成交额比例
-    if flow_ratio > 3:    cap_score += 12
-    elif flow_ratio > 1:  cap_score += 6
+    if flow_ratio > 5:    cap_score += 15
+    elif flow_ratio > 2:  cap_score += 8
     elif flow_ratio < -2: cap_score -= 10
-    elif flow_ratio < -5: cap_score -= 15
+
+    # 量比共振（量比高 + 主力净买入 = 资金持续涌入）
+    if vr >= 2.0 and main_in > 0:  cap_score += 10
+    elif vr < 0.7:                 cap_score -= 8
 
     cap_score = max(0.0, min(100.0, cap_score))
 
     # ── 维度5：风险收益比 ─────────────────────────────────────────
+    # 目标涨幅 / |止损幅度|，比值越高越划算
     gain   = technical.get('expected_gain_pct', 10.0)
     sl_pct = abs(technical.get('stop_loss_pct', -5.0))
-    
-    # 改进：加入止损幅度的合理性检查
-    if sl_pct < 1.5:
-        # 止损空间太小，即使收益高也有风险
-        rr = gain / 1.5
-    elif sl_pct > 15:
-        # 止损空间太大，信号可靠性低
-        rr = gain / 15
-    else:
-        rr = gain / sl_pct if sl_pct > 0 else 2.0
+    rr     = gain / sl_pct if sl_pct > 0 else 2.0
 
-    if rr >= 3.5:    rr_score = 100.0
-    elif rr >= 2.5:  rr_score = 85.0
-    elif rr >= 1.8:  rr_score = 70.0
-    elif rr >= 1.2:  rr_score = 55.0
-    elif rr >= 0.8:  rr_score = 40.0
+    if rr >= 4.0:    rr_score = 100.0
+    elif rr >= 3.0:  rr_score = 85.0
+    elif rr >= 2.0:  rr_score = 70.0
+    elif rr >= 1.5:  rr_score = 55.0
+    elif rr >= 1.0:  rr_score = 40.0
     else:            rr_score = 20.0
 
-    # ── 维度6：到达概率 ─────────────────────────────────────────
-    reach_score = calc_reach_probability_score(klines, technical)
-
-    # ========== 改进：权重调整（6维） ==========
+    # ── 综合加权 ─────────────────────────────────────────────────
     score = (
-        bk_score * 0.22 +
-        mo_score * 0.22 +
-        rs_score * 0.18 +
+        bk_score * 0.25 +
+        mo_score * 0.25 +
+        rs_score * 0.20 +
         cap_score * 0.20 +
-        rr_score * 0.10 +
-        reach_score * 0.08
+        rr_score * 0.10
     )
     score = round(max(0.0, min(100.0, score)), 1)
 
@@ -698,31 +524,17 @@ def calc_success_rate(
         'dim_rs':       round(rs_score, 1),
         'dim_capital':  round(cap_score, 1),
         'dim_rr':       round(rr_score, 1),
-        'dim_reach_prob': round(reach_score, 1),
     }
 
 
-# ==================== 6. 主力资金确认 ====================
+# ==================== 5. 主力资金确认 ====================
 
 def _capital_confirmed(capital: CapitalFlow) -> bool:
     """今日主力净买入（main_net_in > 0）视为多头方向"""
     return capital.get('main_net_in', 0.0) > 0
 
 
-# ==================== 7. 数据时间戳验证 ====================
-
-def _verify_data_sync(quote: QuoteInfo, klines: List[KLineBar], capital: CapitalFlow) -> bool:
-    """验证数据时间戳一致性，确保来自同一交易日"""
-    try:
-        # 提取时间戳（如果有的话）
-        # 这里假设数据源都是当日实时数据，返回 True
-        # 实际使用时需要根据 data_source 的实际时间戳字段调整
-        return True
-    except Exception:
-        return True  # 无法验证则默认通过
-
-
-# ==================== 8. 综合分析入口 ====================
+# ==================== 6. 综合分析入口 ====================
 
 def analyze_stock(code: str, name: str = '', signal_type: str = '') -> AnalysisResult:
     """并发获取数据，计算目标价 / 趋势强度 / 市场位置 / 成功率 / 资金方向"""
@@ -741,10 +553,6 @@ def analyze_stock(code: str, name: str = '', signal_type: str = '') -> AnalysisR
         concepts = fut_concepts.result()
         klines   = fut_klines.result()
         capital  = fut_capital.result()
-
-    # 验证数据同步
-    if not _verify_data_sync(quote, klines, capital):
-        logger.warning(f"数据时间戳不同步: {code}")
 
     current_price = quote.get('price', 0.0)
     if current_price <= 0 and klines:
@@ -775,7 +583,7 @@ def analyze_stock(code: str, name: str = '', signal_type: str = '') -> AnalysisR
     }
 
 
-# ==================== 9. 格式化输出 ====================
+# ==================== 7. 格式化输出 ====================
 
 _GRADE_TAG = {'S': '[S级]', 'A': '[A级]', 'B': '[B级]', 'C': '[C级]', 'D': '[D级]'}
 _GRADE_DESC = {
@@ -810,6 +618,7 @@ def format_analysis_report(result: AnalysisResult) -> str:
         '趋势偏弱': '[  趋势偏弱]',
     }.get(verdict, f'[{verdict}]')
 
+    # 成功率等级放标题行
     grade     = sr.get('grade', '?')
     sr_score  = sr.get('score', 0.0)
     grade_tag = _GRADE_TAG.get(grade, f'[{grade}]')
@@ -839,7 +648,6 @@ def format_analysis_report(result: AnalysisResult) -> str:
         lines.append(
             f"  【止损价】 {tech.get('stop_loss', 0):.2f}"
             f"  止损幅度: {sl_pct:.1f}%"
-            f"  MA20: {tech.get('ma20', 0):.2f}"
             f"  ATR: {tech.get('atr', 0):.3f}"
         )
         methods = tech.get('method_targets', {})
@@ -860,8 +668,7 @@ def format_analysis_report(result: AnalysisResult) -> str:
             f"趋势动能 {sr.get('dim_momentum', 0):.0f}  "
             f"相对强度 {sr.get('dim_rs', 0):.0f}  "
             f"资金持续 {sr.get('dim_capital', 0):.0f}  "
-            f"风险收益 {sr.get('dim_rr', 0):.0f}  "
-            f"到达概率 {sr.get('dim_reach_prob', 0):.0f}"
+            f"风险收益 {sr.get('dim_rr', 0):.0f}"
         )
 
     # 趋势强度
@@ -923,7 +730,7 @@ def format_analysis_report(result: AnalysisResult) -> str:
     return "\n".join(lines)
 
 
-# ==================== 10. 批量分析 ====================
+# ==================== 8. 批量分析 ====================
 
 def analyze_stocks_batch(stocks: List[Tuple[str, str]],
                           signal_types: Optional[Dict[str, str]] = None) -> List[AnalysisResult]:
@@ -933,7 +740,7 @@ def analyze_stocks_batch(stocks: List[Tuple[str, str]],
         signal_types = {}
 
     print(f"\n{'=' * 66}")
-    print("  目标导向分析（短期涨幅 ≥10% 筛选）- 改进版")
+    print("  目标导向分析（短期涨幅 ≥10% 筛选）")
     print(f"  待分析: {len(stocks)} 只")
     print(f"{'=' * 66}")
 
@@ -977,26 +784,25 @@ def analyze_stocks_batch(stocks: List[Tuple[str, str]],
             rs_str  = f"+{rs_val:.1f}%" if rs_val >= 0 else f"{rs_val:.1f}%"
             grade   = sr.get('grade', '?')
             sr_sc   = sr.get('score', 0.0)
-            reach   = sr.get('dim_reach_prob', 0.0)
             print(
                 f"    [{grade}级 {sr_sc:.0f}分]  {r['code']} {r['name']:<8}"
                 f"  目标 {t.get('target_price', 0):.2f}"
                 f"  +{t.get('expected_gain_pct', 0):.1f}%"
                 f"  止损 {t.get('stop_loss', 0):.2f}"
-                f"  到达概率 {reach:.0f}%"
                 f"  趋势[{tr.get('level', '?')}]"
                 f"  RS {rs_str}"
+                f"  量比 {mp.get('vol_ratio', 0):.2f}x"
             )
     print(f"{'=' * 66}\n")
 
     return results
 
 
-# ==================== 11. 独立运行 ====================
+# ==================== 9. 独立运行 ====================
 
 def main() -> None:
     print("=" * 62)
-    print("  个股分析工具（目标导向版，短期涨幅 ≥10%）- 改进版")
+    print("  个股分析工具（目标导向版，短期涨幅 ≥10%）")
     print("=" * 62)
     print("  输入股票代码（6位），多只用逗号分隔")
     print()
