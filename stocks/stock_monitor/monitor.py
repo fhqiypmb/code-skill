@@ -370,19 +370,31 @@ def _format_analysis_for_dingtalk(analysis: dict) -> str:
 
 # ==================== 单信号即时推送 ====================
 def _format_single_signal(period_name: str, code: str, name: str,
-                          signal_type: str, details: dict) -> str:
-    """格式化单只股票的信号消息（精简版）"""
+                          signal_type: str, details: dict,
+                          verdict: str = '', grade: str = '', sr_score: float = 0.0) -> str:
+    """格式化单只股票的信号消息，含达标状态彩色标注"""
     icon = _SIGNAL_TYPE_ICONS.get(signal_type, '⚪')
-    tag = f"{icon}{signal_type}买入"
+    tag  = f"{icon}{signal_type}买入"
 
-    close = details.get('close', 0)
+    close      = details.get('close', 0)
     gold_cross = details.get('gold_cross_date', '')
-    confirm = details.get('date', '')
+    confirm    = details.get('date', '')
+
+    # verdict 彩色加粗：达标绿色，其他红色
+    if verdict == '达标':
+        verdict_html = f'<font color="#00AA00">**{verdict}**</font>'
+    elif verdict:
+        verdict_html = f'<font color="#FF0000">**{verdict}**</font>'
+    else:
+        verdict_html = ''
+
+    # 成功率彩色
+    grade_colored = _format_colored_probability(sr_score) if sr_score > 0 else ''
 
     lines = [
         f"### {tag} | {period_name}",
-        f"**{code} {name}** ¥{close:.2f}",
-        f"金叉:{gold_cross} 确认:{confirm}",
+        f"**{code} {name}** ¥{close:.2f}  {verdict_html}  成功率:{grade_colored} [{grade}级]",
+        f"金叉:{gold_cross}  确认:{confirm}",
     ]
 
     return "\n\n".join(lines)
@@ -441,15 +453,15 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         # 非普通信号：立即单推
         if not is_normal:
             icon = '🔴' if signal_type == '严格' else '🟢'
-            # 标题：无论达不达标都带成功率，不达标额外加⚠️警示
-            warn = '⚠️' if verdict != '达标' else ''
-            verdict_note = f'({verdict})' if verdict != '达标' else ''
+            # 标题：统一格式，末尾加达标状态（不用图标，正文里用彩色字区分）
             title = (
-                f"{warn}{icon}{signal_type}买入{verdict_note}"
-                f" [{grade}级{sr_score:.0f}分]"
-                f" | {period_name} | {code} {name}"
+                f"{icon}{signal_type}买入 [{grade}级{sr_score:.0f}分]"
+                f" | {period_name} | {code} {name} | {verdict}"
             )
-            content = _format_single_signal(period_name, code, name, signal_type, details)
+            content = _format_single_signal(
+                period_name, code, name, signal_type, details,
+                verdict=verdict, grade=grade, sr_score=sr_score
+            )
             analysis_text = _format_analysis_for_dingtalk(analysis)
             if analysis_text:
                 content += "\n\n---\n\n" + analysis_text
@@ -522,12 +534,16 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             verdict = s.get('verdict', '')
             icon    = _SIGNAL_TYPE_ICONS.get(s['signal_type'], '⚪')
 
-            # 未达标加⚠️前缀
-            warn       = "⚠️" if verdict and verdict != '达标' else ""
-            verdict_str = f"[{verdict}]" if verdict and verdict != '达标' else "[达标]"
+            # verdict 彩色加粗
+            if verdict == '达标':
+                verdict_html = f'<font color="#00AA00">**达标**</font>'
+            elif verdict:
+                verdict_html = f'<font color="#FF0000">**{verdict}**</font>'
+            else:
+                verdict_html = ''
             lines.append(
-                f"{warn}{icon}{s['signal_type']} "
-                f"{s['code']} {s['name']} ¥{d.get('close', 0):.2f} {verdict_str}"
+                f"{icon}{s['signal_type']} "
+                f"{s['code']} {s['name']} ¥{d.get('close', 0):.2f}  {verdict_html}"
             )
 
             # 分析摘要：成功率始终显示，不达标时额外标注
