@@ -432,12 +432,23 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             save_signals_to_file(period_name, [], [(code, name, details)])
 
         # 普通信号不单推，只收集到汇总
+        analysis = {}
         if not is_normal:
-            title = f"{signal_type}买入 | {period_name} | {code} {name}"
-            content = _format_single_signal(period_name, code, name, signal_type, details)
-
-            # 基本面分析并附到推送消息
+            # 先跑分析，用 verdict 和成功率决定推送内容
             analysis = _run_stock_analysis(code, name, signal_type)
+            verdict  = analysis.get('verdict', '')       # 达标 / 空间不足 / 趋势偏弱
+            sr       = analysis.get('success_rate', {})
+            grade    = sr.get('grade', '?')              # S/A/B/C/D
+            sr_score = sr.get('score', 0.0)
+
+            # 标题：把 verdict 和成功率等级都带上，让推送本身信息完整
+            if verdict == '达标':
+                title = f"{'🔴' if signal_type=='严格' else '🟢'}{signal_type}买入 [{grade}级{sr_score:.0f}分] | {period_name} | {code} {name}"
+            else:
+                # 选股通过但分析不达标 → 标注警告，降低标题显眼度
+                title = f"⚠️{signal_type}信号(分析{verdict}) | {period_name} | {code} {name}"
+
+            content = _format_single_signal(period_name, code, name, signal_type, details)
             analysis_text = _format_analysis_for_dingtalk(analysis)
             if analysis_text:
                 content += "\n\n---\n\n" + analysis_text
@@ -447,13 +458,14 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
 
         # 所有信号都收集用于汇总
         sig_entry = {
-            'period': period_name,
-            'code': code,
-            'name': name,
+            'period':      period_name,
+            'code':        code,
+            'name':        name,
             'signal_type': signal_type,
-            'details': details,
+            'details':     details,
+            'verdict':     analysis.get('verdict', '') if analysis else '',
             # 非普通信号已在上面分析过，普通信号留到汇总时再分析
-            'analysis': analysis if not is_normal else {},
+            'analysis':    analysis if not is_normal else {},
         }
 
         pushed_signals.append(sig_entry)
@@ -507,9 +519,14 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
     for period, sigs in grouped.items():
         lines.append(f"**{period}**")
         for s in sigs:
-            d = s['details']
-            icon = _SIGNAL_TYPE_ICONS.get(s['signal_type'], '⚪')
-            lines.append(f"{icon}{s['signal_type']} {s['code']} {s['name']} ¥{d.get('close', 0):.2f}")
+            d       = s['details']
+            verdict = s.get('verdict', '')
+            icon    = _SIGNAL_TYPE_ICONS.get(s['signal_type'], '⚪')
+
+            # 未达标加警告前缀
+            warn = "⚠️" if verdict and verdict != '达标' else ""
+            verdict_str = f" [{verdict}]" if verdict and verdict != '达标' else ""
+            lines.append(f"{warn}{icon}{s['signal_type']} {s['code']} {s['name']} ¥{d.get('close', 0):.2f}{verdict_str}")
 
             # 附上分析摘要（成功率 + 行业 + 目标价）
             analysis = s.get('analysis', {})
@@ -528,7 +545,8 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
 
                 extra_str = f" ({', '.join(extra_parts)})" if extra_parts else ""
 
-                if sr:
+                if sr and verdict == '达标':
+                    # 只有真正达标才显示成功率
                     score = sr.get('score', 0)
                     grade = sr.get('grade', '?')
                     colored_score = _format_colored_probability(score)
@@ -537,6 +555,9 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
                         f"  ↳ 成功率:{colored_score} [{grade}级]"
                         f"  目标涨幅+{gain:.1f}%{extra_str}"
                     )
+                elif verdict and verdict != '达标':
+                    # 不达标：说明原因，不展示成功率避免误导
+                    lines.append(f"  ↳ 分析结论:{verdict}{extra_str}")
 
     lines.append(f"共{len(all_signals)}条")
     return "\n\n".join(lines)
