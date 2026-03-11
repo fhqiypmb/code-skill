@@ -431,28 +431,28 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         else:
             save_signals_to_file(period_name, [], [(code, name, details)])
 
-        # 普通信号不单推，只收集到汇总
-        analysis = {}
+        # 所有信号都跑分析（普通信号也跑，汇总时用）
+        analysis = _run_stock_analysis(code, name, signal_type)
+        verdict  = analysis.get('verdict', '')   # 达标 / 空间不足 / 趋势偏弱
+        sr       = analysis.get('success_rate', {})
+        grade    = sr.get('grade', '?')          # S/A/B/C/D
+        sr_score = sr.get('score', 0.0)
+
+        # 非普通信号：立即单推
         if not is_normal:
-            # 先跑分析，用 verdict 和成功率决定推送内容
-            analysis = _run_stock_analysis(code, name, signal_type)
-            verdict  = analysis.get('verdict', '')       # 达标 / 空间不足 / 趋势偏弱
-            sr       = analysis.get('success_rate', {})
-            grade    = sr.get('grade', '?')              # S/A/B/C/D
-            sr_score = sr.get('score', 0.0)
-
-            # 标题：把 verdict 和成功率等级都带上，让推送本身信息完整
-            if verdict == '达标':
-                title = f"{'🔴' if signal_type=='严格' else '🟢'}{signal_type}买入 [{grade}级{sr_score:.0f}分] | {period_name} | {code} {name}"
-            else:
-                # 选股通过但分析不达标 → 标注警告，降低标题显眼度
-                title = f"⚠️{signal_type}信号(分析{verdict}) | {period_name} | {code} {name}"
-
+            icon = '🔴' if signal_type == '严格' else '🟢'
+            # 标题：无论达不达标都带成功率，不达标额外加⚠️警示
+            warn = '⚠️' if verdict != '达标' else ''
+            verdict_note = f'({verdict})' if verdict != '达标' else ''
+            title = (
+                f"{warn}{icon}{signal_type}买入{verdict_note}"
+                f" [{grade}级{sr_score:.0f}分]"
+                f" | {period_name} | {code} {name}"
+            )
             content = _format_single_signal(period_name, code, name, signal_type, details)
             analysis_text = _format_analysis_for_dingtalk(analysis)
             if analysis_text:
                 content += "\n\n---\n\n" + analysis_text
-
             send_dingtalk(webhook, secret, title, content)
             pushed_count[0] += 1
 
@@ -463,9 +463,8 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             'name':        name,
             'signal_type': signal_type,
             'details':     details,
-            'verdict':     analysis.get('verdict', '') if analysis else '',
-            # 非普通信号已在上面分析过，普通信号留到汇总时再分析
-            'analysis':    analysis if not is_normal else {},
+            'verdict':     verdict,
+            'analysis':    analysis,   # 普通/非普通都已分析
         }
 
         pushed_signals.append(sig_entry)
@@ -523,12 +522,15 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             verdict = s.get('verdict', '')
             icon    = _SIGNAL_TYPE_ICONS.get(s['signal_type'], '⚪')
 
-            # 未达标加警告前缀
-            warn = "⚠️" if verdict and verdict != '达标' else ""
-            verdict_str = f" [{verdict}]" if verdict and verdict != '达标' else ""
-            lines.append(f"{warn}{icon}{s['signal_type']} {s['code']} {s['name']} ¥{d.get('close', 0):.2f}{verdict_str}")
+            # 未达标加⚠️前缀
+            warn       = "⚠️" if verdict and verdict != '达标' else ""
+            verdict_str = f"[{verdict}]" if verdict and verdict != '达标' else "[达标]"
+            lines.append(
+                f"{warn}{icon}{s['signal_type']} "
+                f"{s['code']} {s['name']} ¥{d.get('close', 0):.2f} {verdict_str}"
+            )
 
-            # 附上分析摘要（成功率 + 行业 + 目标价）
+            # 分析摘要：成功率始终显示，不达标时额外标注
             analysis = s.get('analysis', {})
             if analysis:
                 sr       = analysis.get('success_rate', {})
@@ -542,22 +544,17 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
                 if mp:
                     rs = mp.get('relative_strength', 0)
                     extra_parts.append(f"RS{rs:+.1f}%")
-
                 extra_str = f" ({', '.join(extra_parts)})" if extra_parts else ""
 
-                if sr and verdict == '达标':
-                    # 只有真正达标才显示成功率
-                    score = sr.get('score', 0)
-                    grade = sr.get('grade', '?')
-                    colored_score = _format_colored_probability(score)
-                    gain = tech.get('expected_gain_pct', 0) if tech else 0
-                    lines.append(
-                        f"  ↳ 成功率:{colored_score} [{grade}级]"
-                        f"  目标涨幅+{gain:.1f}%{extra_str}"
-                    )
-                elif verdict and verdict != '达标':
-                    # 不达标：说明原因，不展示成功率避免误导
-                    lines.append(f"  ↳ 分析结论:{verdict}{extra_str}")
+                score = sr.get('score', 0)
+                grade = sr.get('grade', '?')
+                colored_score = _format_colored_probability(score)
+                gain  = tech.get('expected_gain_pct', 0) if tech else 0
+                sl    = tech.get('stop_loss_pct', 0) if tech else 0
+                lines.append(
+                    f"  ↳ 成功率:{colored_score} [{grade}级]"
+                    f"  目标+{gain:.1f}% 止损{sl:.1f}%{extra_str}"
+                )
 
     lines.append(f"共{len(all_signals)}条")
     return "\n\n".join(lines)
@@ -582,14 +579,7 @@ def run_full_round(stock_list: list, webhook: str, secret: str, dedup: SignalDed
     else:
         logger.info(f"========== 本轮扫描完成，共 {len(all_signals)} 条新信号 ==========")
 
-    # 汇总前：对普通信号补做基本面分析
-    normal_to_analyze = [s for s in all_signals if s['signal_type'] in ('普通', 'normal') and not s.get('analysis')]
-    if normal_to_analyze and not _shutdown:
-        logger.info(f"对 {len(normal_to_analyze)} 只普通信号进行基本面分析...")
-        for s in normal_to_analyze:
-            if _shutdown:
-                break
-            s['analysis'] = _run_stock_analysis(s['code'], s['name'], s['signal_type'])
+    # 普通信号已在 on_signal 里完成分析，此处无需补做
 
     # 推送整合汇总消息
     title = f"第{round_num}轮汇总 | 共{len(all_signals)}条信号"
