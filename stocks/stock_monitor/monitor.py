@@ -371,7 +371,7 @@ def _format_analysis_for_dingtalk(analysis: dict) -> str:
 # ==================== 单信号即时推送 ====================
 def _format_single_signal(period_name: str, code: str, name: str,
                           signal_type: str, details: dict,
-                          verdict: str = '', grade: str = '', sr_score: float = 0.0) -> str:
+                          verdict: str = '') -> str:
     """格式化单只股票的信号消息，含达标状态彩色标注"""
     icon = _SIGNAL_TYPE_ICONS.get(signal_type, '⚪')
     tag  = f"{icon}{signal_type}买入"
@@ -388,12 +388,9 @@ def _format_single_signal(period_name: str, code: str, name: str,
     else:
         verdict_html = ''
 
-    # 成功率彩色
-    grade_colored = _format_colored_probability(sr_score) if sr_score > 0 else ''
-
     lines = [
         f"### {tag} | {period_name}",
-        f"**{code} {name}** ¥{close:.2f}  {verdict_html}  成功率:{grade_colored} [{grade}级]",
+        f"**{code} {name}** ¥{close:.2f}  {verdict_html}",
         f"金叉:{gold_cross}  确认:{confirm}",
     ]
 
@@ -455,12 +452,12 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             icon = '🔴' if signal_type == '严格' else '🟢'
             # 标题：统一格式，末尾加达标状态（不用图标，正文里用彩色字区分）
             title = (
-                f"{icon}{signal_type}买入 [{grade}级{sr_score:.0f}分]"
+                f"{icon}{signal_type}买入"
                 f" | {period_name} | {code} {name} | {verdict}"
             )
             content = _format_single_signal(
                 period_name, code, name, signal_type, details,
-                verdict=verdict, grade=grade, sr_score=sr_score
+                verdict=verdict
             )
             analysis_text = _format_analysis_for_dingtalk(analysis)
             if analysis_text:
