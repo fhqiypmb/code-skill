@@ -494,6 +494,32 @@ def predict(record: Dict) -> Optional[float]:
         return None
 
 
+def record_and_predict(
+    code: str,
+    name: str,
+    period: str,
+    signal_type: str,
+    screener_details: Dict,
+    analysis: Dict,
+) -> Optional[float]:
+    """
+    记录信号 + 立即预测达标概率，一步完成。
+    返回概率(0-100)，模型不存在或失败返回 None。
+    本地和 GitHub Actions 统一调用此函数。
+    """
+    try:
+        record = record_signal(
+            code=code, name=name,
+            period=period, signal_type=signal_type,
+            screener_details=screener_details,
+            analysis=analysis,
+        )
+        return predict(record) if record else None
+    except Exception as e:
+        logger.warning(f"ML记录/预测失败 {code}: {e}")
+        return None
+
+
 # ==================== 统计 ====================
 
 def get_stats() -> Dict:

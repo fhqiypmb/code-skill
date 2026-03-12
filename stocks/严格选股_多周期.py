@@ -1448,19 +1448,18 @@ def test_single_stock(period: str, period_name: str):
         except Exception as e:
             print(f"\n  基本面分析失败: {e}")
 
-        # ---- ML预测 ----
+        # ---- ML记录+预测 ----
         try:
             import sys as _sys
             _ml_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml')
             if _ml_dir not in _sys.path:
                 _sys.path.insert(0, _ml_dir)
             import shadow_learner as _ml_mod
-            record = _ml_mod.record_signal(
+            ml_prob = _ml_mod.record_and_predict(
                 code=code, name=stock_name,
                 period=period_name, signal_type=sig_type,
                 screener_details=details, analysis=analysis,
             )
-            ml_prob = _ml_mod.predict(record) if record else None
             print(f"\n{'=' * 60}")
             if ml_prob is not None:
                 print(f"  ML达标概率: {ml_prob}%")
@@ -1536,12 +1535,11 @@ def main():
                     print(f"  基本面分析失败 {code}: {_e}")
             if _ml_mod and analysis:
                 try:
-                    record = _ml_mod.record_signal(
+                    ml_prob = _ml_mod.record_and_predict(
                         code=code, name=name,
                         period=period_name, signal_type=signal_type,
                         screener_details=details, analysis=analysis,
                     )
-                    ml_prob = _ml_mod.predict(record) if record else None
                     if ml_prob is not None:
                         print(f"  ML达标概率: {ml_prob}%  [{period_name}][{signal_type}]")
                     else:
