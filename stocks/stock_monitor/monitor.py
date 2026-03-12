@@ -462,6 +462,9 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         grade    = sr.get('grade', '?')          # S/A/B/C/D
         sr_score = sr.get('score', 0.0)
 
+        # ML自动记录 + 预测（复用已有analysis，不重复请求）
+        ml_prob = _ml_record_signal(code, name, period_name, signal_type, details, analysis)
+
         # 非普通信号：立即单推
         if not is_normal:
             icon = '🔴' if signal_type == '严格' else '🟢'
@@ -481,9 +484,6 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
                 content += f"\n\n🤖 **ML达标概率** {ml_prob}%"
             send_dingtalk(webhook, secret, title, content)
             pushed_count[0] += 1
-
-        # ML自动记录 + 预测（复用已有analysis，不重复请求）
-        ml_prob = _ml_record_signal(code, name, period_name, signal_type, details, analysis)
 
         # 所有信号都收集用于汇总
         sig_entry = {
