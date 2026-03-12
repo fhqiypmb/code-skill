@@ -152,16 +152,18 @@ def record_signal(
     """
     today = datetime.now().strftime('%Y-%m-%d')
 
-    # 本地才做 pull+merge，Action 环境直接读本地
-    if _is_ci():
-        data = _load_data()
-    else:
-        data = _pull_and_merge()
+    # CI 环境：checkout 拿到的可能是旧版本，需要与当前文件合并（避免覆盖本地已有数据）
+    # 本地环境：git pull 拿最新数据再合并
+    data = _load_data() if _is_ci() else _pull_and_merge()
 
     # 去重：同一天同股票同周期同信号类型只写一次
     if _is_duplicate(data, today, code, period, signal_type):
         logger.info(f"ML去重跳过: {today} {code} {period} {signal_type}")
-        return False
+        # 返回已有记录供预测使用
+        for r in data:
+            if _dedup_key(r.get('date',''), r.get('code',''), r.get('period',''), r.get('signal_type','')) == _dedup_key(today, code, period, signal_type):
+                return r
+        return None
 
     # 打平 screener_details 的数值型字段
     screener_feats = {}
@@ -221,7 +223,7 @@ def record_signal(
     data.append(record)
     _save_data(data, auto_push=not _is_ci())
     logger.info(f"ML记录: {today} {code} {name} [{period}][{signal_type}] 共{len(record)}个字段")
-    return True
+    return record
 
 
 # ==================== 回填实际结果 ====================
@@ -366,6 +368,30 @@ def train() -> Optional[Any]:
     }, MODEL_FILE)
     logger.info(f"模型已保存: {MODEL_FILE}")
     return model
+
+
+# ==================== 预测 ====================
+
+def predict(record: Dict) -> Optional[float]:
+    """
+    用已训练的模型预测该信号的达标概率。
+    模型不存在或预测失败返回 None，不影响主流程。
+    record 的字段结构与 shadow_data.json 中的记录一致。
+    """
+    if not os.path.exists(MODEL_FILE):
+        return None
+    try:
+        import joblib
+        import numpy as np
+        bundle = joblib.load(MODEL_FILE)
+        model         = bundle['model']
+        feature_names = bundle['feature_names']
+        X = np.array([[record.get(f, 0) or 0 for f in feature_names]], dtype=float)
+        prob = model.predict_proba(X)[0][1]  # 达标概率
+        return round(float(prob) * 100, 1)
+    except Exception as e:
+        logger.warning(f"ML预测失败: {e}")
+        return None
 
 
 # ==================== 统计 ====================

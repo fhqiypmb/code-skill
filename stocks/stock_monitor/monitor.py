@@ -67,15 +67,21 @@ except Exception as _ml_import_err:
 
 
 def _ml_record_signal(code, name, period, signal_type, details, analysis):
-    """将信号写入ML数据集，失败静默"""
+    """将信号写入ML数据集并返回达标概率，失败静默返回 None"""
     if not _ML_AVAILABLE:
-        return
-    _shadow_learner.record_signal(
-        code=code, name=name,
-        period=period, signal_type=signal_type,
-        screener_details=details,
-        analysis=analysis,
-    )
+        return None
+    try:
+        record = _shadow_learner.record_signal(
+            code=code, name=name,
+            period=period, signal_type=signal_type,
+            screener_details=details,
+            analysis=analysis,
+        )
+        if record and isinstance(record, dict):
+            return _shadow_learner.predict(record)
+    except Exception as e:
+        logger.warning(f"ML记录/预测失败 {code}: {e}")
+    return None
 
 def _get_probability_color(probability: float) -> str:
     """根据概率返回 HTML 颜色代码"""
@@ -477,14 +483,13 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             analysis_text = _format_analysis_for_dingtalk(analysis, details=details)
             if analysis_text:
                 content += "\n\n" + analysis_text
+            if ml_prob is not None:
+                content += f"\n\n🤖 **ML达标概率** {ml_prob}%"
             send_dingtalk(webhook, secret, title, content)
             pushed_count[0] += 1
 
-        # ML自动记录（复用已有analysis，不重复请求）
-        try:
-            _ml_record_signal(code, name, period_name, signal_type, details, analysis)
-        except Exception as _ml_e:
-            logger.warning(f"ML记录失败 {code}: {_ml_e}")
+        # ML自动记录 + 预测（复用已有analysis，不重复请求）
+        ml_prob = _ml_record_signal(code, name, period_name, signal_type, details, analysis)
 
         # 所有信号都收集用于汇总
         sig_entry = {
@@ -494,7 +499,8 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             'signal_type': signal_type,
             'details':     details,
             'verdict':     verdict,
-            'analysis':    analysis,   # 普通/非普通都已分析
+            'analysis':    analysis,
+            'ml_prob':     ml_prob,
         }
 
         pushed_signals.append(sig_entry)
@@ -571,7 +577,7 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
                 f" ¥{d.get('close', 0):.2f}  {verdict_html}"
             )
 
-            # 第2行：成功率 + 目标/止损 + 行业 + RS（紧凑一行）
+            # 第2行：成功率 + 目标/止损 + 行业 + RS + ML概率（紧凑一行）
             row2_parts = []
             if sr:
                 score = sr.get('score', 0)
@@ -586,6 +592,9 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             if mp:
                 rs = mp.get('relative_strength', 0)
                 row2_parts.append(f"RS{rs:+.1f}%")
+            ml_prob = s.get('ml_prob')
+            if ml_prob is not None:
+                row2_parts.append(f"🤖{ml_prob}%")
             if row2_parts:
                 lines.append("  ↳ " + "  ".join(row2_parts))
 
