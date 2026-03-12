@@ -580,11 +580,13 @@ def run_full_round(stock_list: list, webhook: str, secret: str, dedup: SignalDed
     logger.info(f"========== 开始新一轮扫描 (北京时间 {beijing_now}) ==========")
 
     all_signals = []
-    for period_cfg in PERIODS:
+    for idx, period_cfg in enumerate(PERIODS, 1):
         if _shutdown:
             logger.info("收到终止信号，跳过剩余周期")
             break
+        logger.info(f">>> 开始扫描周期 {idx}/{len(PERIODS)}: {period_cfg['name']}")
         signals = run_scan(period_cfg, stock_list, webhook, secret, dedup)
+        logger.info(f"<<< 周期 {idx}/{len(PERIODS)} 完成，获得 {len(signals)} 条信号")
         all_signals.extend(signals)
 
     if _shutdown:

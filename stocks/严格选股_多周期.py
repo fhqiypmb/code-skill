@@ -319,9 +319,9 @@ class TencentKline(KlineSource):
 
 # 数据源列表
 # 分钟线：仅新浪（东方财富频繁限流已去除，腾讯不支持分钟K线）
-# 日线/周线/月线：仅新浪（同花顺日期格式不一致且无法获取当天数据已去除，东方财富频繁限流已去除，腾讯DNS不通已去除）
+# 日线/周线/月线：腾讯优先（可获取当天实时数据），新浪备用（有延迟但更稳定）
 _SOURCES_MINUTE = [SinaKline]
-_SOURCES_DAILY = [SinaKline]
+_SOURCES_DAILY = [TencentKline, SinaKline]
 
 
 # ==================== 环境检测 ====================
