@@ -143,7 +143,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add stocks/ml/shadow_data.json stocks/ml/shadow_model.pkl || true
+          git add stocks/ml/shadow_data.json stocks/ml/shadow_model.pkl stocks/ml/model_report.md || true
           git diff --staged --quiet || git commit -m "ML训练更新 $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
           git push || true
 

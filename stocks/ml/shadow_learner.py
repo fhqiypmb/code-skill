@@ -357,7 +357,7 @@ def train() -> Optional[Any]:
     for i, (fname, imp) in enumerate(importance[:20], 1):
         logger.info(f"  {i:2d}. {fname:<45} {imp:.4f}")
 
-    joblib.dump({
+    bundle = {
         'model':         model,
         'feature_names': feature_fields,
         'importance':    importance,
@@ -365,9 +365,95 @@ def train() -> Optional[Any]:
         'test_acc':      test_acc,
         'train_date':    datetime.now().strftime('%Y-%m-%d'),
         'sample_count':  len(labeled),
-    }, MODEL_FILE)
+    }
+    joblib.dump(bundle, MODEL_FILE)
     logger.info(f"模型已保存: {MODEL_FILE}")
+
+    _save_report(bundle, labeled, y, feature_fields)
     return model
+
+
+def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]) -> None:
+    """生成模型分析报告 model_report.md"""
+    report_file = os.path.join(_ML_DIR, 'model_report.md')
+    train_date  = bundle['train_date']
+    train_acc   = bundle['train_acc']
+    test_acc    = bundle['test_acc']
+    sample_count = bundle['sample_count']
+    importance  = bundle['importance']
+
+    lines = []
+    lines.append(f"# ML模型分析报告")
+    lines.append(f"\n> 训练日期: {train_date}  |  样本数: {sample_count}  |  训练集准确率: {train_acc:.2%}  |  测试集准确率: {test_acc:.2%}")
+
+    # ── 按周期达标率 ──
+    lines.append(f"\n## 按周期达标率")
+    lines.append("| 周期 | 总信号 | 达标数 | 达标率 |")
+    lines.append("|------|--------|--------|--------|")
+    from collections import defaultdict
+    period_stats = defaultdict(lambda: {'total': 0, 'hit': 0})
+    for r in labeled:
+        p = r.get('period', '?')
+        period_stats[p]['total'] += 1
+        period_stats[p]['hit']   += r.get('reached_target', 0)
+    for p, s in sorted(period_stats.items()):
+        rate = s['hit'] / s['total'] if s['total'] else 0
+        lines.append(f"| {p} | {s['total']} | {s['hit']} | {rate:.1%} |")
+
+    # ── 按信号类型达标率 ──
+    lines.append(f"\n## 按信号类型达标率")
+    lines.append("| 信号类型 | 总信号 | 达标数 | 达标率 |")
+    lines.append("|----------|--------|--------|--------|")
+    type_stats = defaultdict(lambda: {'total': 0, 'hit': 0})
+    for r in labeled:
+        t = r.get('signal_type', '?')
+        type_stats[t]['total'] += 1
+        type_stats[t]['hit']   += r.get('reached_target', 0)
+    for t, s in sorted(type_stats.items()):
+        rate = s['hit'] / s['total'] if s['total'] else 0
+        lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} |")
+
+    # ── 特征重要性 TOP20（容易上涨的信号特征） ──
+    lines.append(f"\n## 特征重要性 TOP20")
+    lines.append("越靠前的特征对模型预测影响越大，可理解为「决定上涨概率的关键因子」。")
+    lines.append("")
+    lines.append("| 排名 | 特征名 | 重要性得分 |")
+    lines.append("|------|--------|------------|")
+    for i, (fname, imp) in enumerate(importance[:20], 1):
+        lines.append(f"| {i} | `{fname}` | {imp:.4f} |")
+
+    # ── 高概率 vs 低概率信号特征均值对比 ──
+    lines.append(f"\n## 高达标 vs 低达标信号特征对比")
+    lines.append("对比达标(1)和未达标(0)样本的特征均值，差异大的特征是区分好坏信号的关键。")
+    lines.append("")
+    import numpy as np
+    hit_records  = [r for r in labeled if r.get('reached_target') == 1]
+    miss_records = [r for r in labeled if r.get('reached_target') == 0]
+
+    # 只取 importance TOP15 的特征做对比
+    top_features = [f for f, _ in importance[:15]]
+    lines.append("| 特征名 | 达标均值 | 未达标均值 | 差异 |")
+    lines.append("|--------|----------|------------|------|")
+    for fname in top_features:
+        hit_vals  = [r.get(fname, 0) or 0 for r in hit_records]
+        miss_vals = [r.get(fname, 0) or 0 for r in miss_records]
+        hit_mean  = np.mean(hit_vals)  if hit_vals  else 0
+        miss_mean = np.mean(miss_vals) if miss_vals else 0
+        diff      = hit_mean - miss_mean
+        direction = "↑达标更高" if diff > 0 else "↓未达标更高"
+        lines.append(f"| `{fname}` | {hit_mean:.3f} | {miss_mean:.3f} | {diff:+.3f} {direction} |")
+
+    # ── 结论 ──
+    lines.append(f"\n## 结论摘要")
+    top3 = [f for f, _ in importance[:3]]
+    lines.append(f"- 最关键的3个特征: `{'` / `'.join(top3)}`")
+    overall_rate = sum(r.get('reached_target', 0) for r in labeled) / len(labeled)
+    lines.append(f"- 整体达标率: {overall_rate:.1%}（基准线，ML预测高于此值才有参考意义）")
+    lines.append(f"- 测试集准确率 {test_acc:.2%}，{'模型有效' if test_acc > overall_rate + 0.05 else '模型效果有限，继续积累样本'}")
+
+    with open(report_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+    logger.info(f"模型报告已保存: {report_file}")
 
 
 # ==================== 预测 ====================
