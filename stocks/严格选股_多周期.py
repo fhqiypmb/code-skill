@@ -1484,7 +1484,44 @@ def main():
             print("股票列表为空")
             return
 
-        normal_results, strict_results = screener.screen_all_stocks(stock_list)
+        # 加载ML模块（失败不影响选股主流程）
+        _ml_mod = None
+        _analyzer_mod = None
+        try:
+            import stock_analyzer as _analyzer_mod
+        except Exception as _e:
+            print(f"  基本面分析模块加载失败: {_e}")
+        try:
+            import sys as _sys
+            _ml_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml')
+            if _ml_dir not in _sys.path:
+                _sys.path.insert(0, _ml_dir)
+            import shadow_learner as _ml_mod
+        except Exception as _e:
+            print(f"  ML模块加载失败（不影响选股）: {_e}")
+
+        def _on_signal_local(code, name, signal_type, details):
+            """扫到信号：做基本面分析 + ML写入"""
+            analysis = {}
+            if _analyzer_mod:
+                try:
+                    analysis = _analyzer_mod.analyze_stock(code, name, signal_type=signal_type)
+                except Exception as _e:
+                    print(f"  基本面分析失败 {code}: {_e}")
+            if _ml_mod and analysis:
+                try:
+                    saved = _ml_mod.record_signal(
+                        code=code, name=name,
+                        period=period_name, signal_type=signal_type,
+                        screener_details=details, analysis=analysis,
+                    )
+                    print(f"  ML {'写入' if saved else '去重跳过'}: {code} {name} [{period_name}][{signal_type}]")
+                except Exception as _e:
+                    print(f"  ML写入失败 {code}: {_e}")
+
+        normal_results, strict_results = screener.screen_all_stocks(
+            stock_list, on_signal=_on_signal_local
+        )
 
         all_results = strict_results + normal_results
         if not all_results:
@@ -1500,15 +1537,6 @@ def main():
             print(f"\n{'=' * 80}")
             print(f"  汇总: {' + '.join(parts)} = 共 {len(all_results)} 只")
             print(f"{'=' * 80}")
-
-            # ---- 基本面分析 ----
-            try:
-                import stock_analyzer
-                signal_types = {code: d.get('signal_type', '') for code, name, d in all_results}
-                stocks_to_analyze = [(code, name) for code, name, d in all_results]
-                stock_analyzer.analyze_stocks_batch(stocks_to_analyze, signal_types=signal_types)
-            except Exception as e:
-                print(f"\n  基本面分析失败: {e}")
 
 
 
