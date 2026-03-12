@@ -295,76 +295,68 @@ def _run_stock_analysis(code: str, name: str, signal_type: str) -> dict:
         return {}
 
 
-def _format_analysis_for_dingtalk(analysis: dict) -> str:
-    """将个股分析结果格式化为钉钉Markdown片段"""
+def _format_analysis_for_dingtalk(analysis: dict, details: dict = None) -> str:
+    """将个股分析结果格式化为钉钉Markdown片段（紧凑版）"""
     if not analysis:
         return ""
 
     lines = []
 
-    # 行业
+    tech    = analysis.get('technical', {})
+    sr      = analysis.get('success_rate', {})
+    mp      = analysis.get('market_pos', {})
+    capital = analysis.get('capital', {})
     industry = analysis.get('industry', '')
-    if industry:
-        lines.append(f"**行业**: {industry}")
 
-    # 概念（取前8个）
-    concepts = analysis.get('concepts', [])
-    if concepts:
-        shown = concepts[:8]
-        extra = f" ...共{len(concepts)}个" if len(concepts) > 8 else ""
-        lines.append(f"**概念**: {', '.join(shown)}{extra}")
-
-    # 目标价 & 止损
-    tech = analysis.get('technical', {})
+    # 第1行：目标价 & 止损
     if tech:
         gain   = tech.get('expected_gain_pct', 0)
         sl_pct = tech.get('stop_loss_pct', 0)
         lines.append(
-            f"**目标价**: {tech.get('target_price', 0):.2f}"
-            f"  (+{gain:.1f}%)  **止损**: {tech.get('stop_loss', 0):.2f}"
-            f"  ({sl_pct:.1f}%)"
+            f"目标 {tech.get('target_price', 0):.2f}(**+{gain:.1f}%**)  "
+            f"止损 {tech.get('stop_loss', 0):.2f}({sl_pct:.1f}%)"
         )
 
-    # 成功率
-    sr = analysis.get('success_rate', {})
+    # 第2行：成功率 + 行业 + 相对强度
     if sr:
-        score = sr.get('score', 0)
-        grade = sr.get('grade', '?')
+        score        = sr.get('score', 0)
+        grade        = sr.get('grade', '?')
         colored_score = _format_colored_probability(score)
-        lines.append(f"**成功率**: {colored_score}  [{grade}级]")
-
-        # 6维度简要
-        dim_parts = [
-            f"突破质量{sr.get('dim_breakout', 0):.0f}",
-            f"趋势动能{sr.get('dim_momentum', 0):.0f}",
-            f"相对强度{sr.get('dim_rs', 0):.0f}",
-            f"资金持续{sr.get('dim_capital', 0):.0f}",
-            f"风险收益{sr.get('dim_rr', 0):.0f}",
-            f"到达概率{sr.get('dim_reach_prob', 0):.0f}",
-        ]
-        lines.append(f"**维度**: {' | '.join(dim_parts)}")
-
-    # 趋势 & 市场位置
-    trend = analysis.get('trend', {})
-    mp    = analysis.get('market_pos', {})
-    if trend or mp:
-        parts = []
-        if trend:
-            parts.append(f"趋势[{trend.get('level', '?')}] {trend.get('score', 0):.0f}分")
+        rs_str = ''
         if mp:
-            rs  = mp.get('relative_strength', 0)
-            rs_str = f"+{rs:.1f}%" if rs >= 0 else f"{rs:.1f}%"
-            parts.append(f"相对强度 {rs_str}")
-            parts.append(f"量比 {mp.get('vol_ratio', 1):.2f}x")
-        lines.append(f"**技术**: {' | '.join(parts)}")
+            rs = mp.get('relative_strength', 0)
+            rs_str = f"  RS{rs:+.1f}%"
+        industry_str = f"  {industry}" if industry else ""
+        lines.append(f"成功率 {colored_score} [{grade}级]{industry_str}{rs_str}")
 
-    # 主力资金
-    capital = analysis.get('capital', {})
+    # 第3行：6维度
+    if sr:
+        dim_parts = [
+            f"突破{sr.get('dim_breakout', 0):.0f}",
+            f"动能{sr.get('dim_momentum', 0):.0f}",
+            f"强度{sr.get('dim_rs', 0):.0f}",
+            f"资金{sr.get('dim_capital', 0):.0f}",
+            f"收益{sr.get('dim_rr', 0):.0f}",
+            f"到达{sr.get('dim_reach_prob', 0):.0f}",
+        ]
+        lines.append(" | ".join(dim_parts))
+
+    # 第4行：主力资金 + 量比 + 金叉/确认日期
+    parts4 = []
     if capital:
         main_in = capital.get('main_net_in', 0)
         flow    = capital.get('flow_ratio', 0)
-        dir_str = f"净买入 +{main_in:.0f}万" if main_in > 0 else f"净卖出 {main_in:.0f}万"
-        lines.append(f"**主力资金**: {dir_str}  占比 {flow:+.2f}%")
+        dir_str = f"主力+{main_in:.0f}万({flow:+.1f}%)" if main_in > 0 else f"主力{main_in:.0f}万({flow:+.1f}%)"
+        parts4.append(dir_str)
+    if mp:
+        parts4.append(f"量比{mp.get('vol_ratio', 1):.2f}x")
+    if details:
+        gold = details.get('gold_cross_date', '')[-5:] if details.get('gold_cross_date') else ''
+        confirm = details.get('date', '')[-5:] if details.get('date') else ''
+        if gold or confirm:
+            parts4.append(f"金叉{gold}  确认{confirm}")
+    if parts4:
+        lines.append("  ".join(parts4))
 
     return "\n\n".join(lines)
 
@@ -372,16 +364,13 @@ def _format_analysis_for_dingtalk(analysis: dict) -> str:
 # ==================== 单信号即时推送 ====================
 def _format_single_signal(period_name: str, code: str, name: str,
                           signal_type: str, details: dict,
-                          verdict: str = '') -> str:
-    """格式化单只股票的信号消息，含达标状态彩色标注"""
+                          verdict: str = '', round_num: int = 0) -> str:
+    """格式化单只股票的信号消息"""
     icon = _SIGNAL_TYPE_ICONS.get(signal_type, '⚪')
-    tag  = f"{icon}{signal_type}买入"
+    round_tag = f" | 第{round_num}轮" if round_num else ""
 
-    close      = details.get('close', 0)
-    gold_cross = details.get('gold_cross_date', '')
-    confirm    = details.get('date', '')
+    close = details.get('close', 0)
 
-    # verdict 彩色加粗：达标绿色，其他红色
     if verdict == '达标':
         verdict_html = f'<font color="#00AA00">**{verdict}**</font>'
     elif verdict:
@@ -390,9 +379,8 @@ def _format_single_signal(period_name: str, code: str, name: str,
         verdict_html = ''
 
     lines = [
-        f"### {tag} | {period_name}",
-        f"**{code} {name}** ¥{close:.2f}  {verdict_html}",
-        f"金叉:{gold_cross}  确认:{confirm}",
+        f"### {icon}{signal_type}买入 | {period_name}{round_tag}",
+        f"**{code} {name}  ¥{close:.2f}  {verdict_html}**",
     ]
 
     return "\n\n".join(lines)
@@ -451,11 +439,11 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             )
             content = _format_single_signal(
                 period_name, code, name, signal_type, details,
-                verdict=verdict
+                verdict=verdict, round_num=round_num
             )
-            analysis_text = _format_analysis_for_dingtalk(analysis)
+            analysis_text = _format_analysis_for_dingtalk(analysis, details=details)
             if analysis_text:
-                content += "\n\n---\n\n" + analysis_text
+                content += "\n\n" + analysis_text
             send_dingtalk(webhook, secret, title, content)
             pushed_count[0] += 1
 
