@@ -1501,11 +1501,14 @@ def main():
             print(f"  ML模块加载失败（不影响选股）: {_e}")
 
         def _on_signal_local(code, name, signal_type, details):
-            """扫到信号：做基本面分析 + ML写入"""
+            """扫到信号：做基本面分析（打印报告） + ML写入"""
             analysis = {}
             if _analyzer_mod:
                 try:
                     analysis = _analyzer_mod.analyze_stock(code, name, signal_type=signal_type)
+                    # 打印完整分析报告（和之前一致）
+                    report = _analyzer_mod.format_analysis_report(analysis)
+                    print(report)
                 except Exception as _e:
                     print(f"  基本面分析失败 {code}: {_e}")
             if _ml_mod and analysis:
