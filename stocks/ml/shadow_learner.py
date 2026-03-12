@@ -384,7 +384,9 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
 
     lines = []
     lines.append(f"# ML模型分析报告")
-    lines.append(f"\n> 训练日期: {train_date}  |  样本数: {sample_count}  |  训练集准确率: {train_acc:.2%}  |  测试集准确率: {test_acc:.2%}")
+    lines.append(f"\n> **训练日期**: {train_date}（模型最近一次训练的日期，每周一自动更新）  ")
+    lines.append(f"> **样本数**: {sample_count}（已回填实际涨跌结果的历史信号数量）  ")
+    lines.append(f"> **训练集准确率**: {train_acc:.2%}  |  **测试集准确率**: {test_acc:.2%}")
 
     # ── 按周期达标率 ──
     lines.append(f"\n## 按周期达标率")
@@ -400,18 +402,30 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
         rate = s['hit'] / s['total'] if s['total'] else 0
         lines.append(f"| {p} | {s['total']} | {s['hit']} | {rate:.1%} |")
 
-    # ── 按信号类型达标率 ──
+    # ── 按信号类型达标率（筑底/突破/严格/普通）──
     lines.append(f"\n## 按信号类型达标率")
+    lines.append("信号类型说明：**筑底**=底部企稳反弹、**突破**=放量突破压力位、**严格**=金叉严格条件全满足、**普通**=金叉基本条件满足")
+    lines.append("")
     lines.append("| 信号类型 | 总信号 | 达标数 | 达标率 |")
     lines.append("|----------|--------|--------|--------|")
+    type_order = ['筑底', '突破', '严格', '普通']
     type_stats = defaultdict(lambda: {'total': 0, 'hit': 0})
     for r in labeled:
         t = r.get('signal_type', '?')
         type_stats[t]['total'] += 1
         type_stats[t]['hit']   += r.get('reached_target', 0)
+    # 按预定顺序输出，其余类型追加在后
+    shown = []
+    for t in type_order:
+        if t in type_stats:
+            s = type_stats[t]
+            rate = s['hit'] / s['total'] if s['total'] else 0
+            lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} |")
+            shown.append(t)
     for t, s in sorted(type_stats.items()):
-        rate = s['hit'] / s['total'] if s['total'] else 0
-        lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} |")
+        if t not in shown:
+            rate = s['hit'] / s['total'] if s['total'] else 0
+            lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} |")
 
     # ── 特征重要性 TOP20（容易上涨的信号特征） ──
     lines.append(f"\n## 特征重要性 TOP20")
