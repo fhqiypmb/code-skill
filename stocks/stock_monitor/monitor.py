@@ -333,13 +333,14 @@ def _format_analysis_for_dingtalk(analysis: dict) -> str:
         colored_score = _format_colored_probability(score)
         lines.append(f"**成功率**: {colored_score}  [{grade}级]")
 
-        # 5维度简要
+        # 6维度简要
         dim_parts = [
-            f"突破{sr.get('dim_breakout', 0):.0f}",
-            f"动能{sr.get('dim_momentum', 0):.0f}",
-            f"强度{sr.get('dim_rs', 0):.0f}",
-            f"资金{sr.get('dim_capital', 0):.0f}",
-            f"赔率{sr.get('dim_rr', 0):.0f}",
+            f"突破质量{sr.get('dim_breakout', 0):.0f}",
+            f"趋势动能{sr.get('dim_momentum', 0):.0f}",
+            f"相对强度{sr.get('dim_rs', 0):.0f}",
+            f"资金持续{sr.get('dim_capital', 0):.0f}",
+            f"风险收益{sr.get('dim_rr', 0):.0f}",
+            f"到达概率{sr.get('dim_reach_prob', 0):.0f}",
         ]
         lines.append(f"**维度**: {' | '.join(dim_parts)}")
 
