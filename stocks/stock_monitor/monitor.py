@@ -296,40 +296,41 @@ def _run_stock_analysis(code: str, name: str, signal_type: str) -> dict:
 
 
 def _format_analysis_for_dingtalk(analysis: dict, details: dict = None) -> str:
-    """将个股分析结果格式化为钉钉Markdown片段（紧凑版）"""
+    """将个股分析结果格式化为钉钉Markdown片段（结构化分行版）"""
     if not analysis:
         return ""
 
     lines = []
 
-    tech    = analysis.get('technical', {})
-    sr      = analysis.get('success_rate', {})
-    mp      = analysis.get('market_pos', {})
-    capital = analysis.get('capital', {})
+    tech     = analysis.get('technical', {})
+    sr       = analysis.get('success_rate', {})
+    mp       = analysis.get('market_pos', {})
+    capital  = analysis.get('capital', {})
     industry = analysis.get('industry', '')
+    concepts = analysis.get('concepts', [])
 
-    # 第1行：目标价 & 止损
+    # 目标价 & 止损
     if tech:
         gain   = tech.get('expected_gain_pct', 0)
         sl_pct = tech.get('stop_loss_pct', 0)
         lines.append(
-            f"目标 {tech.get('target_price', 0):.2f}(**+{gain:.1f}%**)  "
-            f"止损 {tech.get('stop_loss', 0):.2f}({sl_pct:.1f}%)"
+            f"📈 **目标** {tech.get('target_price', 0):.2f}(**+{gain:.1f}%**)  "
+            f"🛡 **止损** {tech.get('stop_loss', 0):.2f}({sl_pct:.1f}%)"
         )
 
-    # 第2行：成功率 + 行业 + 相对强度
+    # 成功率 + 行业 + RS
     if sr:
-        score        = sr.get('score', 0)
-        grade        = sr.get('grade', '?')
+        score         = sr.get('score', 0)
+        grade         = sr.get('grade', '?')
         colored_score = _format_colored_probability(score)
         rs_str = ''
         if mp:
             rs = mp.get('relative_strength', 0)
             rs_str = f"  RS{rs:+.1f}%"
         industry_str = f"  {industry}" if industry else ""
-        lines.append(f"成功率 {colored_score} [{grade}级]{industry_str}{rs_str}")
+        lines.append(f"⭐ **成功率** {colored_score} [{grade}级]{industry_str}{rs_str}")
 
-    # 第3行：6维度
+    # 6维度（紧凑一行）
     if sr:
         dim_parts = [
             f"突破{sr.get('dim_breakout', 0):.0f}",
@@ -339,24 +340,34 @@ def _format_analysis_for_dingtalk(analysis: dict, details: dict = None) -> str:
             f"收益{sr.get('dim_rr', 0):.0f}",
             f"到达{sr.get('dim_reach_prob', 0):.0f}",
         ]
-        lines.append(" | ".join(dim_parts))
+        lines.append("📊 " + " | ".join(dim_parts))
 
-    # 第4行：主力资金 + 量比 + 金叉/确认日期
-    parts4 = []
+    # 主力资金 + 量比
+    cap_parts = []
     if capital:
         main_in = capital.get('main_net_in', 0)
         flow    = capital.get('flow_ratio', 0)
-        dir_str = f"主力+{main_in:.0f}万({flow:+.1f}%)" if main_in > 0 else f"主力{main_in:.0f}万({flow:+.1f}%)"
-        parts4.append(dir_str)
+        cap_parts.append(
+            f"净买入 +{main_in:.0f}万({flow:+.1f}%)" if main_in > 0
+            else f"净卖出 {main_in:.0f}万({flow:+.1f}%)"
+        )
     if mp:
-        parts4.append(f"量比{mp.get('vol_ratio', 1):.2f}x")
+        cap_parts.append(f"量比 {mp.get('vol_ratio', 1):.2f}x")
+    if cap_parts:
+        lines.append("💰 " + "  ".join(cap_parts))
+
+    # 金叉 & 确认日期
     if details:
-        gold = details.get('gold_cross_date', '')[-5:] if details.get('gold_cross_date') else ''
-        confirm = details.get('date', '')[-5:] if details.get('date') else ''
+        gold    = details.get('gold_cross_date', '')
+        confirm = details.get('date', '')
         if gold or confirm:
-            parts4.append(f"金叉{gold}  确认{confirm}")
-    if parts4:
-        lines.append("  ".join(parts4))
+            lines.append(f"🕐 金叉 {gold}  确认 {confirm}")
+
+    # 概念（小字，折叠感，取前6个）
+    if concepts:
+        shown = concepts[:6]
+        extra = f" 等{len(concepts)}个" if len(concepts) > 6 else ""
+        lines.append(f"🏷 {' / '.join(shown)}{extra}")
 
     return "\n\n".join(lines)
 
@@ -365,24 +376,22 @@ def _format_analysis_for_dingtalk(analysis: dict, details: dict = None) -> str:
 def _format_single_signal(period_name: str, code: str, name: str,
                           signal_type: str, details: dict,
                           verdict: str = '', round_num: int = 0) -> str:
-    """格式化单只股票的信号消息"""
-    icon = _SIGNAL_TYPE_ICONS.get(signal_type, '⚪')
-    round_tag = f" | 第{round_num}轮" if round_num else ""
-
-    close = details.get('close', 0)
+    """格式化单只股票的信号消息（标题区）"""
+    icon      = _SIGNAL_TYPE_ICONS.get(signal_type, '⚪')
+    round_tag = f" · 第{round_num}轮" if round_num else ""
+    close     = details.get('close', 0)
 
     if verdict == '达标':
-        verdict_html = f'<font color="#00AA00">**{verdict}**</font>'
+        verdict_html = f'<font color="#00AA00">**✅ {verdict}**</font>'
     elif verdict:
-        verdict_html = f'<font color="#FF0000">**{verdict}**</font>'
+        verdict_html = f'<font color="#FF0000">**❌ {verdict}**</font>'
     else:
         verdict_html = ''
 
     lines = [
-        f"### {icon}{signal_type}买入 | {period_name}{round_tag}",
-        f"**{code} {name}  ¥{close:.2f}  {verdict_html}**",
+        f"### {icon} {signal_type}买入 · {period_name}{round_tag}",
+        f"**{code} {name}  ¥{close:.2f}**  {verdict_html}",
     ]
-
     return "\n\n".join(lines)
 
 
@@ -507,51 +516,50 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
         grouped[period].append(sig)
 
     for period, sigs in grouped.items():
-        lines.append(f"**{period}**")
+        lines.append(f"**── {period} ──**")
         for s in sigs:
-            d       = s['details']
-            verdict = s.get('verdict', '')
-            icon    = _SIGNAL_TYPE_ICONS.get(s['signal_type'], '⚪')
+            d        = s['details']
+            verdict  = s.get('verdict', '')
+            icon     = _SIGNAL_TYPE_ICONS.get(s['signal_type'], '⚪')
+            analysis = s.get('analysis', {})
+            sr       = analysis.get('success_rate', {}) if analysis else {}
+            tech     = analysis.get('technical', {}) if analysis else {}
+            mp       = analysis.get('market_pos', {}) if analysis else {}
+            industry = analysis.get('industry', '') if analysis else ''
 
-            # verdict 彩色加粗
+            # verdict 彩色
             if verdict == '达标':
-                verdict_html = f'<font color="#00AA00">**达标**</font>'
+                verdict_html = f'<font color="#00AA00">✅{verdict}</font>'
             elif verdict:
-                verdict_html = f'<font color="#FF0000">**{verdict}**</font>'
+                verdict_html = f'<font color="#FF0000">❌{verdict}</font>'
             else:
                 verdict_html = ''
+
+            # 第1行：信号类型 + 股票 + 价格 + 达标
             lines.append(
-                f"{icon}{s['signal_type']} "
-                f"{s['code']} {s['name']} ¥{d.get('close', 0):.2f}  {verdict_html}"
+                f"{icon}**{s['signal_type']}** {s['code']} {s['name']}"
+                f" ¥{d.get('close', 0):.2f}  {verdict_html}"
             )
 
-            # 分析摘要：成功率始终显示，不达标时额外标注
-            analysis = s.get('analysis', {})
-            if analysis:
-                sr       = analysis.get('success_rate', {})
-                industry = analysis.get('industry', '')
-                tech     = analysis.get('technical', {})
-                mp       = analysis.get('market_pos', {})
-
-                extra_parts = []
-                if industry:
-                    extra_parts.append(industry)
-                if mp:
-                    rs = mp.get('relative_strength', 0)
-                    extra_parts.append(f"RS{rs:+.1f}%")
-                extra_str = f" ({', '.join(extra_parts)})" if extra_parts else ""
-
+            # 第2行：成功率 + 目标/止损 + 行业 + RS（紧凑一行）
+            row2_parts = []
+            if sr:
                 score = sr.get('score', 0)
                 grade = sr.get('grade', '?')
-                colored_score = _format_colored_probability(score)
-                gain  = tech.get('expected_gain_pct', 0) if tech else 0
-                sl    = tech.get('stop_loss_pct', 0) if tech else 0
-                lines.append(
-                    f"  ↳ 成功率:{colored_score} [{grade}级]"
-                    f"  目标+{gain:.1f}% 止损{sl:.1f}%{extra_str}"
-                )
+                row2_parts.append(f"{_format_colored_probability(score)}[{grade}]")
+            if tech:
+                gain = tech.get('expected_gain_pct', 0)
+                sl   = tech.get('stop_loss_pct', 0)
+                row2_parts.append(f"+{gain:.1f}%/-{abs(sl):.1f}%")
+            if industry:
+                row2_parts.append(industry)
+            if mp:
+                rs = mp.get('relative_strength', 0)
+                row2_parts.append(f"RS{rs:+.1f}%")
+            if row2_parts:
+                lines.append("  ↳ " + "  ".join(row2_parts))
 
-    lines.append(f"共{len(all_signals)}条")
+    lines.append(f"\n共 {len(all_signals)} 条信号")
     return "\n\n".join(lines)
 
 
