@@ -40,11 +40,26 @@ def _load_data() -> List[Dict]:
         return []
 
 
-def _save_data(data: List[Dict]) -> None:
+def _save_data(data: List[Dict], auto_push: bool = False) -> None:
     os.makedirs(_ML_DIR, exist_ok=True)
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     logger.info(f"ML数据已保存: {len(data)} 条")
+
+    # 本地环境自动 push（Action 由 Commit signals 步骤统一提交）
+    if auto_push and not _is_ci():
+        try:
+            import subprocess
+            repo_root = os.path.dirname(os.path.dirname(_ML_DIR))
+            subprocess.run(['git', 'add', DATA_FILE], cwd=repo_root, timeout=10)
+            subprocess.run(
+                ['git', 'commit', '-m', f'ML数据自动更新 {datetime.now().strftime("%Y-%m-%d %H:%M")}'],
+                cwd=repo_root, capture_output=True, timeout=10
+            )
+            subprocess.run(['git', 'push'], cwd=repo_root, capture_output=True, timeout=30)
+            logger.info("ML数据已自动 push 到远端")
+        except Exception as e:
+            logger.warning(f"ML数据自动 push 失败（数据已保存本地）: {e}")
 
 
 # ==================== 去重 ====================
@@ -68,6 +83,59 @@ def _is_duplicate(data: List[Dict], date: str, code: str, period: str, signal_ty
 
 # ==================== 核心：记录信号 ====================
 
+def _pull_and_merge() -> List[Dict]:
+    """
+    本地环境：git pull 拿最新 shadow_data.json，与本地合并后返回
+    Action 环境或 git 不可用时：直接返回本地数据
+    去重key = date|code|period|signal_type
+    """
+    local_data = _load_data()
+
+    # 判断是否在 git 仓库里、是否有 git 命令
+    try:
+        import subprocess
+        repo_root = os.path.dirname(os.path.dirname(_ML_DIR))  # stocks/ml -> stocks -> repo根
+        result = subprocess.run(
+            ['git', 'pull', '--rebase', '--autostash'],
+            cwd=repo_root,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            logger.warning(f"git pull 失败（忽略）: {result.stderr.strip()}")
+            return local_data
+        logger.info(f"git pull 完成: {result.stdout.strip()}")
+    except Exception as e:
+        logger.debug(f"git pull 跳过: {e}")
+        return local_data
+
+    # pull 之后重新读（可能有远端新数据）
+    remote_data = _load_data()
+
+    # 以远端为基准，把本地独有的条目合并进去
+    existing_keys = {
+        _dedup_key(r.get('date',''), r.get('code',''), r.get('period',''), r.get('signal_type',''))
+        for r in remote_data
+    }
+    added = 0
+    for r in local_data:
+        k = _dedup_key(r.get('date',''), r.get('code',''), r.get('period',''), r.get('signal_type',''))
+        if k not in existing_keys:
+            remote_data.append(r)
+            existing_keys.add(k)
+            added += 1
+
+    if added:
+        logger.info(f"本地合并: 新增 {added} 条到远端数据")
+        _save_data(remote_data)
+
+    return remote_data
+
+
+def _is_ci() -> bool:
+    """判断是否在 CI/Action 环境"""
+    return os.environ.get('CI') == 'true' or os.environ.get('GITHUB_ACTIONS') == 'true'
+
+
 def record_signal(
     code: str,
     name: str,
@@ -78,11 +146,17 @@ def record_signal(
 ) -> bool:
     """
     记录一次信号到 shadow_data.json
-    analysis 直接复用 monitor.py 里已经跑完的结果，不重复请求
+    analysis 直接复用已跑完的结果，不重复请求
+    本地环境：写入前先 git pull 合并，避免覆盖 Action 写的数据
     返回 True=新记录写入，False=重复跳过
     """
     today = datetime.now().strftime('%Y-%m-%d')
-    data  = _load_data()
+
+    # 本地才做 pull+merge，Action 环境直接读本地
+    if _is_ci():
+        data = _load_data()
+    else:
+        data = _pull_and_merge()
 
     # 去重：同一天同股票同周期同信号类型只写一次
     if _is_duplicate(data, today, code, period, signal_type):
@@ -145,7 +219,7 @@ def record_signal(
     }
 
     data.append(record)
-    _save_data(data)
+    _save_data(data, auto_push=not _is_ci())
     logger.info(f"ML记录: {today} {code} {name} [{period}][{signal_type}] 共{len(record)}个字段")
     return True
 
