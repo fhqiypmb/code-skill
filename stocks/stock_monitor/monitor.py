@@ -120,12 +120,8 @@ TRADING_END_MORNING = "11:35"
 TRADING_START_AFTERNOON = "12:55"
 TRADING_END_AFTERNOON = "15:05"
 
-# 去重窗口（小时）：仅用于分钟线
+# 去重窗口（小时）
 DEDUP_HOURS = 2
-
-# 日线去重：按「signal_date + 推送日期」去重，同一信号同一天只推一次
-# 跨天若 signal_date 相同（形态未更新）也不再重复推
-DEDUP_DAILY_PERIODS = {'240min', 'weekly', 'monthly'}
 
 # 信号结果文件（会被 Actions commit 到仓库）
 SIGNALS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signals')
@@ -204,14 +200,8 @@ class SignalDedup:
                 with open(self._file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 now = time.time()
-                kept = {}
-                for k, v in data.items():
-                    period = k.split('|')[0] if '|' in k else ''
-                    if period in DEDUP_DAILY_PERIODS:
-                        kept[k] = v  # 日线记录永久保留
-                    elif now - v < DEDUP_HOURS * 3600:
-                        kept[k] = v  # 分钟线只保留2小时内的
-                self._sent = kept
+                self._sent = {k: v for k, v in data.items()
+                              if now - v < DEDUP_HOURS * 3600}
             except Exception:
                 self._sent = {}
 
@@ -223,21 +213,14 @@ class SignalDedup:
             pass
 
     def is_new(self, period: str, code: str, signal_date: str, signal_type: str) -> bool:
-        if period in DEDUP_DAILY_PERIODS:
-            # 日线/周线/月线：signal_date 相同则永不重复推送
-            key = f"{period}|{code}|{signal_date}|{signal_type}"
-            return key not in self._sent
-        else:
-            # 分钟线：2小时窗口内去重
-            key = f"{period}|{code}|{signal_date}|{signal_type}"
-            ts = self._sent.get(key)
-            if ts and time.time() - ts < DEDUP_HOURS * 3600:
-                return False
-            return True
+        key = f"{period}|{code}|{signal_date}|{signal_type}"
+        ts = self._sent.get(key)
+        if ts and time.time() - ts < DEDUP_HOURS * 3600:
+            return False
+        return True
 
     def mark_sent(self, period: str, code: str, signal_date: str, signal_type: str):
         key = f"{period}|{code}|{signal_date}|{signal_type}"
-        # 日线永久记录时间戳（供 _load 清理分钟线时保留日线记录用）
         self._sent[key] = time.time()
         self._save()
 
