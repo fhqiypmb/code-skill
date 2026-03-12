@@ -398,7 +398,7 @@ def _format_single_signal(period_name: str, code: str, name: str,
 
 
 # ==================== 单周期扫描（边扫边推） ====================
-def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedup: SignalDedup):
+def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedup: SignalDedup, round_num: int = 0):
     """执行一个周期的选股扫描，扫到信号立即推送，并返回本轮推送的信号列表"""
     if _shutdown:
         return []
@@ -423,16 +423,9 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
     pushed_signals = []  # 收集本轮推送的信号
 
     def on_signal(code, name, signal_type, details):
-        """回调：扫到信号立即去重+推送+保存（普通信号只汇总不单推）"""
+        """回调：扫到信号立即推送+保存（每轮都推，普通信号只汇总不单推）"""
         signal_date = details.get('date', '')
         is_normal = signal_type in ('普通', 'normal')
-
-        # 去重
-        if not dedup.is_new(period_code, code, signal_date, signal_type):
-            logger.info(f"[{period_name}] {code} {name} 已推送过，跳过")
-            return
-
-        dedup.mark_sent(period_code, code, signal_date, signal_type)
 
         # 保存到文件
         if is_normal:
@@ -450,10 +443,10 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         # 非普通信号：立即单推
         if not is_normal:
             icon = '🔴' if signal_type == '严格' else '🟢'
-            # 标题：统一格式，末尾加达标状态（不用图标，正文里用彩色字区分）
+            round_tag = f" | 第{round_num}轮" if round_num else ""
             title = (
                 f"{icon}{signal_type}买入"
-                f" | {period_name} | {code} {name} | {verdict}"
+                f" | {period_name} | {code} {name} | {verdict}{round_tag}"
             )
             content = _format_single_signal(
                 period_name, code, name, signal_type, details,
@@ -585,7 +578,7 @@ def run_full_round(stock_list: list, webhook: str, secret: str, dedup: SignalDed
             logger.info("收到终止信号，跳过剩余周期")
             break
         logger.info(f">>> 开始扫描周期 {idx}/{len(PERIODS)}: {period_cfg['name']}")
-        signals = run_scan(period_cfg, stock_list, webhook, secret, dedup)
+        signals = run_scan(period_cfg, stock_list, webhook, secret, dedup, round_num=round_num)
         logger.info(f"<<< 周期 {idx}/{len(PERIODS)} 完成，获得 {len(signals)} 条信号")
         all_signals.extend(signals)
 
