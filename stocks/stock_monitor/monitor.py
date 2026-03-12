@@ -53,6 +53,30 @@ spec.loader.exec_module(screener)
 
 from notifier import send_dingtalk, format_signal_message
 
+# ==================== ML 模块（可选，失败不影响主流程） ====================
+try:
+    _ML_DIR = os.path.join(PARENT_DIR, 'ml')
+    import sys as _sys
+    if _ML_DIR not in _sys.path:
+        _sys.path.insert(0, _ML_DIR)
+    import shadow_learner as _shadow_learner
+    _ML_AVAILABLE = True
+except Exception as _ml_import_err:
+    _ML_AVAILABLE = False
+    logging.getLogger(__name__).warning(f"ML模块未加载: {_ml_import_err}")
+
+
+def _ml_record_signal(code, name, period, signal_type, details, analysis):
+    """将信号写入ML数据集，失败静默"""
+    if not _ML_AVAILABLE:
+        return
+    _shadow_learner.record_signal(
+        code=code, name=name,
+        period=period, signal_type=signal_type,
+        screener_details=details,
+        analysis=analysis,
+    )
+
 def _get_probability_color(probability: float) -> str:
     """根据概率返回 HTML 颜色代码"""
     if probability >= 80:
@@ -455,6 +479,12 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
                 content += "\n\n" + analysis_text
             send_dingtalk(webhook, secret, title, content)
             pushed_count[0] += 1
+
+        # ML自动记录（复用已有analysis，不重复请求）
+        try:
+            _ml_record_signal(code, name, period_name, signal_type, details, analysis)
+        except Exception as _ml_e:
+            logger.warning(f"ML记录失败 {code}: {_ml_e}")
 
         # 所有信号都收集用于汇总
         sig_entry = {

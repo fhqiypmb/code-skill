@@ -104,5 +104,39 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add stocks/stock_monitor/signals/ stocks/stock_monitor/sent_signals.json stocks/stock_list.md || true
+          git add stocks/ml/shadow_data.json || true
           git diff --staged --quiet || git commit -m "更新信号数据 $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
+          git push || true
+
+  # 每周训练任务：回填实际结果 + 训练模型
+  ml-train:
+    runs-on: ubuntu-latest
+    # 每周一 07:00 北京时间（周日UTC23点），与 update-stock-list 同一触发器
+    if: github.event.schedule == '0 23 * * 0' || github.event.inputs.mode == 'update_stock_list'
+    needs: update-stock-list
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install scikit-learn joblib numpy
+
+      - name: Run weekly train
+        run: python stocks/ml/weekly_train.py
+
+      - name: Commit ml data & model
+        if: "!cancelled()"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stocks/ml/shadow_data.json stocks/ml/shadow_model.pkl || true
+          git diff --staged --quiet || git commit -m "ML训练更新 $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
           git push || true

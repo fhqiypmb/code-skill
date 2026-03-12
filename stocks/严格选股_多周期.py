@@ -344,7 +344,7 @@ def _get_env_config() -> dict:
         }
     else:
         return {
-            'max_per_sec': 13.0,       # 本地国内直连，保守限速
+            'max_per_sec': 30.0,       # 本地国内直连，保守限速
             'max_workers_minute': 4,    # 本地线程数
             'max_workers_daily': 6,     # 本地线程数
             'env_name': '本地',
