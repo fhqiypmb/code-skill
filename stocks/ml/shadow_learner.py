@@ -516,7 +516,8 @@ def record_and_predict(
         )
         return predict(record) if record else None
     except Exception as e:
-        logger.warning(f"ML记录/预测失败 {code}: {e}")
+        import traceback
+        logger.error(f"ML记录/预测失败 {code}: {e}\n{traceback.format_exc()}")
         return None
 
 
