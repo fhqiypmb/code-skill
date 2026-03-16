@@ -276,9 +276,19 @@ def save_signals_to_file(period_name: str, normal_results: list, strict_results:
         except Exception:
             existing = []
 
+    # 构建已有信号的去重集合：(周期, 代码, 信号日期, 类型)
+    existing_keys = {
+        (r.get('period', ''), r.get('code', ''), r.get('signal_date', ''), r.get('type', ''))
+        for r in existing
+    }
+
     timestamp = get_beijing_now().strftime('%Y-%m-%d %H:%M:%S')
+    added = 0
 
     for code, name, details in strict_results:
+        key = (period_name, code, details.get('date', ''), '严格买入')
+        if key in existing_keys:
+            continue
         existing.append({
             'time': timestamp,
             'period': period_name,
@@ -289,8 +299,13 @@ def save_signals_to_file(period_name: str, normal_results: list, strict_results:
             'signal_date': details.get('date', ''),
             'gold_cross_date': details.get('gold_cross_date', ''),
         })
+        existing_keys.add(key)
+        added += 1
 
     for code, name, details in normal_results:
+        key = (period_name, code, details.get('date', ''), '普通买入')
+        if key in existing_keys:
+            continue
         existing.append({
             'time': timestamp,
             'period': period_name,
@@ -301,11 +316,13 @@ def save_signals_to_file(period_name: str, normal_results: list, strict_results:
             'signal_date': details.get('date', ''),
             'gold_cross_date': details.get('gold_cross_date', ''),
         })
+        existing_keys.add(key)
+        added += 1
 
     with open(filename, 'w', encoding='utf-8') as f:
         json.dump(existing, f, ensure_ascii=False, indent=2)
 
-    logger.info(f"信号已保存到 {filename}")
+    logger.info(f"信号已保存到 {filename}（新增{added}条，已有{len(existing)-added}条去重跳过）")
 
 
 # ==================== 信号类型映射 ====================
@@ -459,7 +476,7 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         signal_date = details.get('date', '')
         is_normal = signal_type in ('普通', 'normal')
 
-        # 保存到文件
+        # 保存到文件（save_signals_to_file 内部去重）
         if is_normal:
             save_signals_to_file(period_name, [(code, name, details)], [])
         else:
