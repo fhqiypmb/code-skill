@@ -22,7 +22,7 @@ MODEL_FILE = os.path.join(_ML_DIR, 'shadow_model.pkl')
 OUTCOME_DAYS = 5
 
 # 训练所需的最少已标记样本数
-MIN_TRAIN_SAMPLES = 50
+MIN_TRAIN_SAMPLES = 45
 
 
 # ==================== 数据读写 ====================
