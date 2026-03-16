@@ -67,20 +67,25 @@ except Exception as _ml_import_err:
 
 
 def _ml_record_signal(code, name, period, signal_type, details, analysis):
-    """将信号写入ML数据集并返回达标概率，失败静默返回 None"""
+    """将信号写入ML数据集并返回达标概率，失败自动重试最多3次"""
     if not _ML_AVAILABLE:
         return None
-    try:
-        return _shadow_learner.record_and_predict(
-            code=code, name=name,
-            period=period, signal_type=signal_type,
-            screener_details=details,
-            analysis=analysis,
-        )
-    except Exception as e:
-        import traceback
-        logging.getLogger(__name__).error(f"ML写入失败 {code} {name}: {e}\n{traceback.format_exc()}")
-        return None
+    for attempt in range(1, 4):
+        try:
+            return _shadow_learner.record_and_predict(
+                code=code, name=name,
+                period=period, signal_type=signal_type,
+                screener_details=details,
+                analysis=analysis,
+            )
+        except Exception as e:
+            import traceback
+            logging.getLogger(__name__).error(
+                f"ML写入失败 {code} {name} (第{attempt}次): {e}\n{traceback.format_exc()}"
+            )
+            if attempt < 3:
+                time.sleep(1)
+    return None
 
 def _get_probability_color(probability: float) -> str:
     """根据概率返回 HTML 颜色代码"""

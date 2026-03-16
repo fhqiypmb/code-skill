@@ -67,6 +67,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add stocks/stock_list.md || true
           git diff --staged --quiet || git commit -m "更新股票列表 $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
+          # 先 pull rebase 合并远端变更，防止本地 push 期间有新提交导致 push 失败丢数据
+          git pull --rebase --autostash || true
           git push || true
 
   # 股票监控任务
@@ -112,6 +114,7 @@ jobs:
           git add stocks/stock_list.md || true
           git add stocks/ml/shadow_data.json || true
           git diff --staged --quiet || git commit -m "更新信号数据 $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
+          git pull --rebase --autostash || true
           git push || true
 
   # 每周训练任务：回填实际结果 + 训练模型
@@ -145,6 +148,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add stocks/ml/shadow_data.json stocks/ml/shadow_model.pkl stocks/ml/model_report.md || true
           git diff --staged --quiet || git commit -m "ML训练更新 $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
+          git pull --rebase --autostash || true
           git push || true
 
   # ML系统测试（手动触发）

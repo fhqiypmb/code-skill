@@ -507,18 +507,22 @@ def record_and_predict(
     返回概率(0-100)，模型不存在或失败返回 None。
     本地和 GitHub Actions 统一调用此函数。
     """
-    try:
-        record = record_signal(
-            code=code, name=name,
-            period=period, signal_type=signal_type,
-            screener_details=screener_details,
-            analysis=analysis,
-        )
-        return predict(record) if record else None
-    except Exception as e:
-        import traceback
-        logger.error(f"ML记录/预测失败 {code}: {e}\n{traceback.format_exc()}")
-        return None
+    for attempt in range(1, 4):
+        try:
+            record = record_signal(
+                code=code, name=name,
+                period=period, signal_type=signal_type,
+                screener_details=screener_details,
+                analysis=analysis,
+            )
+            return predict(record) if record else None
+        except Exception as e:
+            import traceback
+            logger.error(f"ML记录/预测失败 {code} (第{attempt}次): {e}\n{traceback.format_exc()}")
+            if attempt < 3:
+                import time
+                time.sleep(1)
+    return None
 
 
 # ==================== 统计 ====================
