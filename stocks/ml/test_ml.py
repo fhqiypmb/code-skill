@@ -43,9 +43,14 @@ r1 = sl.record_signal('603365', '水星家纺', '30分钟', '严格',
 print(f"    结果: {'[OK] 写入成功' if r1 else '跳过(重复)'}")
 
 print("\n[2] 再次写入相同信号（测试去重）...")
+count_before = len(sl._load_data())
 r2 = sl.record_signal('603365', '水星家纺', '30分钟', '严格',
                       fake_details, fake_analysis)
-print(f"    结果: {'写入成功' if r2 else '[OK] 去重跳过(正确)'}")
+count_after = len(sl._load_data())
+if count_after == count_before:
+    print(f"    结果: [OK] 去重跳过(正确)")
+else:
+    print(f"    结果: [FAIL] 未去重，记录数从{count_before}增加到{count_after}")
 
 print("\n[3] 不同周期同一股票（应允许写入）...")
 r3 = sl.record_signal('603365', '水星家纺', '日线', '严格',
