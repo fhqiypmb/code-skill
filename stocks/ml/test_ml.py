@@ -3,9 +3,12 @@ ML系统测试脚本 - 本地 & GitHub Action 都可用
 用法: python stocks/ml/test_ml.py
 """
 import os, sys, json
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import shadow_learner as sl
+
+today = datetime.now().strftime('%Y-%m-%d')
 
 print("=" * 55)
 print("  ML系统测试")
@@ -14,8 +17,8 @@ print("=" * 55)
 # ── 1. 写入一条假信号（测试记录+去重） ──────────────────
 fake_details = {
     'close': 20.70,
-    'gold_cross_date': '2026-03-12',
-    'date': '2026-03-12',
+    'gold_cross_date': today,
+    'date': today,
     'macd': 0.12,
     'rsi': 62.5,
     'volume_ratio': 1.8,
