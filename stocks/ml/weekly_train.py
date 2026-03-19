@@ -45,9 +45,9 @@ def main():
         print(f"  样本充足，开始训练...")
         model = sl.train()
         if model:
-            print(f"  ✓ 训练完成")
+            print(f"  [OK] 训练完成")
         else:
-            print(f"  ✗ 训练失败")
+            print(f"  [FAIL] 训练失败")
     else:
         print(f"  样本不足（需要 {sl.MIN_TRAIN_SAMPLES} 条），跳过训练")
         print(f"  继续积累信号数据，等待自动回填后再训练")

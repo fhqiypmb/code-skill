@@ -349,11 +349,12 @@ def fetch_kline(code: str, period: str = '240min', limit: int = 1500,
     for fetch_fn in order:
         try:
             data = fetch_fn(code, period, limit)
-            if data and len(data) > 30:
+            if data and len(data) > 0:
                 return data
         except Exception as e:
             err_str = str(e)
-            if any(c in err_str for c in ('456', '403', '429', 'RemoteDisconnected')):
+            if any(c in err_str for c in ('456', '403', '429', 'RemoteDisconnected')) or \
+                    'RemoteDisconnected' in type(e).__name__:
                 src_name = fetch_fn.__name__
                 _record_throttle(src_name)
                 if 'eastmoney' in src_name:

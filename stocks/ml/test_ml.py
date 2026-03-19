@@ -72,6 +72,29 @@ stats = sl.get_stats()
 for k, v in stats.items():
     print(f"    {k}: {v}")
 
+# ── 4. 测试回填（K 线接口 + 实际回填逻辑）──────────────
+print("\n[6] 测试回填...")
+try:
+    stocks_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if stocks_dir not in sys.path:
+        sys.path.insert(0, stocks_dir)
+    import data_source
+
+    # 先验证 K 线接口本身
+    code = '002177'
+    klines = data_source.fetch_kline(code, period='240min', limit=10)
+    if klines:
+        print(f"    [OK] fetch_kline: {len(klines)} 条, last={klines[-1]['day']} close={klines[-1]['close']}")
+    else:
+        print(f"    [FAIL] fetch_kline 返回空，回填将无法执行")
+
+    # 再跑实际回填逻辑，看能回填几条
+    updated = sl.update_outcomes()
+    stats2 = sl.get_stats()
+    print(f"    [OK] 回填完成: {updated} 条，累计已标记: {stats2['labeled']} 条")
+except Exception as e:
+    print(f"    [ERROR] {type(e).__name__}: {e}")
+
 print("\n" + "=" * 55)
 print("[DONE] 测试完成")
 print("=" * 55)
