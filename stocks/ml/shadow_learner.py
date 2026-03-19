@@ -373,6 +373,83 @@ def train() -> Optional[Any]:
     return model
 
 
+_FEATURE_NAMES_ZH = {
+    # 选股指标 (sc_)
+    'sc_close':              '收盘价',
+    'sc_ma20':               'MA20均线',
+    'sc_ma30':               'MA30均线',
+    'sc_volume':             '成交量',
+    'sc_days_since_gold':    '金叉距今天数',
+    'sc_days_since_first_double': '倍量阳距今天数',
+    'sc_first_double_price': '倍量阳收盘价',
+    'sc_first_double_vol':   '倍量阳成交量',
+    'sc_gold_day_vol':       '金叉日成交量',
+    'sc_yin_vol':            '阴线成交量',
+    'sc_gap_days':           '金叉到确认天数',
+    'sc_ma5_rising':         'MA5上升',
+    'sc_bottom_stable':      '底部稳定',
+    'sc_vol_explode':        '成交量爆量',
+    'sc_bottom_buy':         '筑底买入',
+    'sc_breakout_buy':       '突破买入',
+    # 行情 (an_quote_)
+    'an_quote_price':        '当前价格',
+    'an_quote_change_pct':   '涨跌幅%',
+    'an_quote_high':         '今日最高',
+    'an_quote_low':          '今日最低',
+    'an_quote_open':         '今日开盘',
+    'an_quote_pre_close':    '昨日收盘',
+    'an_quote_volume':       '成交量(手)',
+    'an_quote_amount':       '成交额(元)',
+    'an_quote_turnover_rate':'换手率%',
+    # 技术指标 (an_technical_)
+    'an_technical_current_price':       '当前价',
+    'an_technical_target_price':        '目标价',
+    'an_technical_stop_loss':           '止损价',
+    'an_technical_expected_gain_pct':   '预期涨幅%',
+    'an_technical_stop_loss_pct':       '止损幅度%',
+    'an_technical_space_ok':            '空间达标',
+    'an_technical_atr':                 'ATR波动率',
+    'an_technical_ma20':                '技术MA20',
+    'an_technical_method_targets_压力位法':  '目标价-压力位法',
+    'an_technical_method_targets_ATR通道法': '目标价-ATR法',
+    'an_technical_method_targets_斐波那契':  '目标价-斐波那契',
+    # 趋势 (an_trend_)
+    'an_trend_score':           '趋势总分',
+    'an_trend_ma_align':        '均线多头排列',
+    'an_trend_vol_price_ok':    '量价配合',
+    'an_trend_macd_positive':   'MACD正值',
+    'an_trend_macd_strength':   'MACD强度',
+    'an_trend_detail_ma_align': '趋势-均线得分',
+    'an_trend_detail_vol_price':'趋势-量价得分',
+    'an_trend_detail_macd':     '趋势-MACD得分',
+    # 市场强度 (an_market_pos_)
+    'an_market_pos_score':           '市场强度总分',
+    'an_market_pos_relative_strength':'相对强度(vs基准)',
+    'an_market_pos_rs_score':        '相对强度得分',
+    'an_market_pos_vol_ratio':       '量比',
+    'an_market_pos_vr_score':        '量比得分',
+    # 成功率 (an_success_rate_)
+    'an_success_rate_score':         '成功率总分',
+    'an_success_rate_dim_breakout':  '成功率-突破维度',
+    'an_success_rate_dim_momentum':  '成功率-动能维度',
+    'an_success_rate_dim_rs':        '成功率-相对强度',
+    'an_success_rate_dim_capital':   '成功率-资金维度',
+    'an_success_rate_dim_rr':        '成功率-风险收益',
+    'an_success_rate_dim_reach_prob':'到达目标价概率',
+    # 资金 (an_capital_)
+    'an_capital_main_net_in':  '主力净流入(万)',
+    'an_capital_super_net_in': '超大单净流入(万)',
+    'an_capital_big_net_in':   '大单净流入(万)',
+    'an_capital_flow_ratio':   '主力流入强度%',
+    'an_capital_confirmed':    '资金确认',
+}
+
+def _feat_zh(name: str) -> str:
+    """特征名转中文，未收录的原样返回"""
+    return _FEATURE_NAMES_ZH.get(name, name)
+
+
+
 def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]) -> None:
     """生成模型分析报告 model_report.md"""
     report_file = os.path.join(_ML_DIR, 'model_report.md')
