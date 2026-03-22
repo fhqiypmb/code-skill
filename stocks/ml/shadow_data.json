@@ -4629,10 +4629,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0729,
+    "exit_price": 3.05,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -4722,10 +4722,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.006,
+    "exit_price": 5.01,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -4815,10 +4815,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.045,
+    "exit_price": 10.41,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -4908,10 +4908,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0718,
+    "exit_price": 6.85,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5001,10 +5001,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0499,
+    "exit_price": 8.57,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5094,10 +5094,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0852,
+    "exit_price": 38.99,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5187,10 +5187,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0424,
+    "exit_price": 10.39,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5280,10 +5280,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0759,
+    "exit_price": 11.45,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5373,10 +5373,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0642,
+    "exit_price": 21.0,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5466,10 +5466,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0849,
+    "exit_price": 13.48,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5559,10 +5559,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0993,
+    "exit_price": 5.35,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5652,10 +5652,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.101,
+    "exit_price": 8.72,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5745,10 +5745,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0311,
+    "exit_price": 14.66,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5838,10 +5838,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1231,
+    "exit_price": 9.69,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -5931,10 +5931,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0693,
+    "exit_price": 14.91,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6024,10 +6024,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0423,
+    "exit_price": 19.93,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6117,10 +6117,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0463,
+    "exit_price": 30.92,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6210,10 +6210,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0299,
+    "exit_price": 45.44,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6303,10 +6303,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0725,
+    "exit_price": 12.02,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6396,10 +6396,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0635,
+    "exit_price": 8.26,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6489,10 +6489,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0876,
+    "exit_price": 41.54,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6582,10 +6582,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0637,
+    "exit_price": 1.47,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6675,10 +6675,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0589,
+    "exit_price": 49.06,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6768,10 +6768,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0588,
+    "exit_price": 4.32,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6861,10 +6861,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0345,
+    "exit_price": 5.31,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -6954,10 +6954,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.026,
+    "exit_price": 22.13,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7047,10 +7047,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0734,
+    "exit_price": 17.68,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7140,10 +7140,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0497,
+    "exit_price": 58.1,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7233,10 +7233,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0634,
+    "exit_price": 2.51,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7326,10 +7326,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0613,
+    "exit_price": 6.28,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7419,10 +7419,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0605,
+    "exit_price": 6.99,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7512,10 +7512,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0876,
+    "exit_price": 33.75,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7605,10 +7605,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.066,
+    "exit_price": 4.95,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7698,10 +7698,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0545,
+    "exit_price": 11.8,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7791,10 +7791,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1179,
+    "exit_price": 5.46,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7884,10 +7884,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0686,
+    "exit_price": 8.96,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -7977,10 +7977,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1257,
+    "exit_price": 6.12,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -8070,10 +8070,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.058,
+    "exit_price": 7.79,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -8163,10 +8163,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1171,
+    "exit_price": 15.61,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -8256,10 +8256,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0581,
+    "exit_price": 7.46,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -8349,10 +8349,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0539,
+    "exit_price": 13.7,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -8442,10 +8442,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0238,
+    "exit_price": 39.8,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -8535,10 +8535,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0341,
+    "exit_price": 17.58,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -8628,10 +8628,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0766,
+    "exit_price": 14.46,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -8721,10 +8721,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1611,
+    "exit_price": 10.05,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -8814,10 +8814,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.044,
+    "exit_price": 84.77,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -8907,10 +8907,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0294,
+    "exit_price": 11.9,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9000,10 +9000,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.013,
+    "exit_price": 16.71,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9093,10 +9093,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0855,
+    "exit_price": 20.21,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9186,10 +9186,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1266,
+    "exit_price": 17.93,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9279,10 +9279,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0009,
+    "exit_price": 11.49,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9372,10 +9372,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0997,
+    "exit_price": 16.52,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9465,10 +9465,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0369,
+    "exit_price": 20.38,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9558,10 +9558,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.061,
+    "exit_price": 22.47,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9651,10 +9651,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0034,
+    "exit_price": 32.48,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9744,10 +9744,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0469,
+    "exit_price": 8.74,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9837,10 +9837,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0608,
+    "exit_price": 12.35,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -9930,10 +9930,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0843,
+    "exit_price": 41.38,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10023,10 +10023,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0944,
+    "exit_price": 6.52,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10116,10 +10116,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0263,
+    "exit_price": 7.03,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10209,10 +10209,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0859,
+    "exit_price": 25.76,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10302,10 +10302,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1275,
+    "exit_price": 14.1,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10395,10 +10395,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0283,
+    "exit_price": 7.21,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10488,10 +10488,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0662,
+    "exit_price": 62.67,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10581,10 +10581,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1754,
+    "exit_price": 19.18,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10674,10 +10674,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0793,
+    "exit_price": 14.4,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10767,10 +10767,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1206,
+    "exit_price": 22.68,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10860,10 +10860,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0528,
+    "exit_price": 13.1,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -10953,10 +10953,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0917,
+    "exit_price": 24.28,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11046,10 +11046,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0461,
+    "exit_price": 20.67,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11139,10 +11139,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0933,
+    "exit_price": 27.61,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11232,10 +11232,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1082,
+    "exit_price": 42.1,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11325,10 +11325,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1189,
+    "exit_price": 23.65,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11418,10 +11418,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.045,
+    "exit_price": 6.37,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11511,10 +11511,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0753,
+    "exit_price": 42.85,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11604,10 +11604,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0689,
+    "exit_price": 14.87,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11697,10 +11697,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0794,
+    "exit_price": 11.82,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11790,10 +11790,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0643,
+    "exit_price": 16.02,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11883,10 +11883,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 1,
+    "actual_return": 0.2308,
+    "exit_price": 72.36,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -11976,10 +11976,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0986,
+    "exit_price": 128.88,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12069,10 +12069,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0583,
+    "exit_price": 18.1,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12162,10 +12162,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0649,
+    "exit_price": 157.08,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12255,10 +12255,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0358,
+    "exit_price": 49.03,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12348,10 +12348,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0552,
+    "exit_price": 22.78,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12441,10 +12441,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1291,
+    "exit_price": 24.49,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12534,10 +12534,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0045,
+    "exit_price": 35.35,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12627,10 +12627,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0725,
+    "exit_price": 17.79,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12720,10 +12720,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0396,
+    "exit_price": 56.66,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12813,10 +12813,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0824,
+    "exit_price": 33.17,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12906,10 +12906,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.077,
+    "exit_price": 21.23,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -12999,10 +12999,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1026,
+    "exit_price": 115.16,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -13092,10 +13092,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0883,
+    "exit_price": 47.5,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -13185,10 +13185,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.042,
+    "exit_price": 14.14,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -13278,10 +13278,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0566,
+    "exit_price": 101.69,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -13371,10 +13371,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0216,
+    "exit_price": 64.9,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -13464,10 +13464,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0689,
+    "exit_price": 142.0,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -13557,10 +13557,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0034,
+    "exit_price": 55.77,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -13650,10 +13650,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0259,
+    "exit_price": 10.71,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -13743,10 +13743,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.2053,
+    "exit_price": 8.09,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -13836,10 +13836,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0644,
+    "exit_price": 8.28,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -13929,10 +13929,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0694,
+    "exit_price": 20.64,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14022,10 +14022,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1629,
+    "exit_price": 8.63,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14115,10 +14115,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0536,
+    "exit_price": 21.03,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14208,10 +14208,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0587,
+    "exit_price": 3.21,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14301,10 +14301,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0781,
+    "exit_price": 12.39,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14394,10 +14394,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0561,
+    "exit_price": 11.94,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14487,10 +14487,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0247,
+    "exit_price": 19.07,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14580,10 +14580,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0524,
+    "exit_price": 5.24,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14673,10 +14673,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.126,
+    "exit_price": 11.51,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14766,10 +14766,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0653,
+    "exit_price": 11.3,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14859,10 +14859,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0677,
+    "exit_price": 5.78,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -14952,10 +14952,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0352,
+    "exit_price": 10.14,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15045,10 +15045,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0351,
+    "exit_price": 36.0,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15138,10 +15138,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0985,
+    "exit_price": 28.0,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15231,10 +15231,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0494,
+    "exit_price": 12.71,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15324,10 +15324,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0677,
+    "exit_price": 12.8,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15417,10 +15417,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0598,
+    "exit_price": 20.76,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15510,10 +15510,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0052,
+    "exit_price": 17.2,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15603,10 +15603,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1033,
+    "exit_price": 39.08,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15696,10 +15696,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0495,
+    "exit_price": 15.55,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15789,10 +15789,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0293,
+    "exit_price": 6.96,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15882,10 +15882,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0631,
+    "exit_price": 39.18,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -15975,10 +15975,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0454,
+    "exit_price": 25.23,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16068,10 +16068,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0451,
+    "exit_price": 46.18,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16161,10 +16161,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0295,
+    "exit_price": 6.59,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16254,10 +16254,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0362,
+    "exit_price": 13.06,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16347,10 +16347,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0551,
+    "exit_price": 18.35,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16440,10 +16440,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.09,
+    "exit_price": 21.63,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16533,10 +16533,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0338,
+    "exit_price": 37.01,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16626,10 +16626,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1589,
+    "exit_price": 22.28,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16719,10 +16719,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.047,
+    "exit_price": 7.1,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16812,10 +16812,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1093,
+    "exit_price": 8.64,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16905,10 +16905,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0919,
+    "exit_price": 10.08,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -16998,10 +16998,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0188,
+    "exit_price": 67.8,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -17091,10 +17091,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.075,
+    "exit_price": 34.64,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -17184,10 +17184,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.094,
+    "exit_price": 24.68,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -17277,10 +17277,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0583,
+    "exit_price": 3.39,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -17370,10 +17370,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1451,
+    "exit_price": 13.08,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -17463,10 +17463,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0013,
+    "exit_price": 7.8,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -17556,10 +17556,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0291,
+    "exit_price": 18.34,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -17649,10 +17649,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0932,
+    "exit_price": 17.8,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -17742,10 +17742,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0706,
+    "exit_price": 30.02,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -17835,10 +17835,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0785,
+    "exit_price": 12.09,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -17928,10 +17928,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0687,
+    "exit_price": 33.76,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -18021,10 +18021,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0237,
+    "exit_price": 39.23,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -18114,10 +18114,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1186,
+    "exit_price": 36.04,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -18207,10 +18207,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0921,
+    "exit_price": 9.56,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -18300,10 +18300,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0171,
+    "exit_price": 37.85,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-16",
@@ -18393,10 +18393,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.031,
+    "exit_price": 10.0,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -18486,10 +18486,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0861,
+    "exit_price": 22.18,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -18579,10 +18579,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1099,
+    "exit_price": 7.53,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -18672,10 +18672,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0075,
+    "exit_price": 9.38,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -18765,10 +18765,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "突破",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0227,
+    "exit_price": 26.23,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -18858,10 +18858,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0706,
+    "exit_price": 30.02,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -18951,10 +18951,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "趋势偏弱",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0785,
+    "exit_price": 12.09,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19044,10 +19044,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0687,
+    "exit_price": 33.76,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19137,10 +19137,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0237,
+    "exit_price": 39.23,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19230,10 +19230,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1186,
+    "exit_price": 36.04,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19323,10 +19323,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0136,
+    "exit_price": 5.09,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19416,10 +19416,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.1101,
+    "exit_price": 3.88,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19509,10 +19509,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0921,
+    "exit_price": 9.56,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19602,10 +19602,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0557,
+    "exit_price": 27.84,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19695,10 +19695,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "达标",
     "an_signal_type": "普通",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": 0.0428,
+    "exit_price": 16.56,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19788,10 +19788,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0836,
+    "exit_price": 30.92,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19881,10 +19881,10 @@
     "an_capital_confirmed": 0.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0326,
+    "exit_price": 87.86,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-17",
@@ -19974,10 +19974,10 @@
     "an_capital_confirmed": 1.0,
     "an_verdict": "空间不足",
     "an_signal_type": "严格",
-    "reached_target": null,
-    "actual_return": null,
-    "exit_price": null,
-    "exit_date": null
+    "reached_target": 0,
+    "actual_return": -0.0835,
+    "exit_price": 77.54,
+    "exit_date": "2026-03-22"
   },
   {
     "date": "2026-03-18",
