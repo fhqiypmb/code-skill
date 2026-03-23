@@ -232,15 +232,6 @@ def _fetch_kline_with_turnover(code: str, limit: int = 210) -> pd.DataFrame:
 def fetch_chip_data(code: str) -> pd.DataFrame:
     """
     获取筹码分布数据（基于通达信 CYQ 算法 - 筹码衰减模型）
-
-    算法原理：
-    1. 将价格区间分为 150 个档位
-    2. 每日筹码根据换手率衰减（卖出）
-    3. 新筹码在当日价格区间叠加（买入）
-    4. 累积历史筹码形成完整分布
-
-    换手率来源：东方财富 f61(hsl) 字段（真实流通股换手率），与通达信/akshare 一致
-    算法来源：akshare stock_cyq_em 内嵌 JS（CYQCalculator），完整移植为 Python
     """
     # 优先用带真实换手率的接口（东方财富 f61=hsl）
     temp_df = _fetch_kline_with_turnover(code, limit=210)
@@ -408,24 +399,7 @@ def fetch_stock_name(code: str) -> str:
 
 def analyze_chip(code: str, chip_df: pd.DataFrame, price_df: pd.DataFrame) -> dict:
     """
-    主力视角四维分析：
-
-    维度1：套牢程度（恐慌深度）
-        获利比例越低 = 越多人被套 = 散户越绝望 = 带血筹码越多
-        主力最爱的状态：获利比例 < 20%，也就是80%的人都在亏钱
-
-    维度2：带血程度（吸筹性价比）
-        当前价格 vs 平均成本的距离
-        越便宜于平均成本 = 筹码越"带血" = 吸筹越划算
-
-    维度3：上方压力（出货空间）
-        套牢盘集中在哪个价位
-        主力拉升到那里，套牢者解套急着卖 = 主力出货窗口
-        压力越集中越好，说明出货目标明确
-
-    维度4：筹码集中度（吸筹完成度）
-        筹码越分散 = 还没有人完成大规模吸筹 = 主力还有机会
-        筹码突然集中 = 有大资金在某价位完成了换手
+    主力视角四维分析
     """
     result = {}
 
@@ -445,74 +419,61 @@ def analyze_chip(code: str, chip_df: pd.DataFrame, price_df: pd.DataFrame) -> di
     result["price_date"] = price_df["date"].iloc[-1].strftime("%Y-%m-%d")
 
     # ── 维度1：套牢程度 ──
-    # 获利比例越低 = 被套的人越多 = 恐慌越深
     profit_ratio = result["profit_ratio"]
     loss_ratio = 100 - profit_ratio  # 被套比例
     result["loss_ratio"] = loss_ratio
 
     # 套牢程度评分（0-100）
-    # 获利比例 0% → 满分100，获利比例 50% → 0分
     trap_score = max(0.0, min(100.0, (50 - profit_ratio) / 50 * 100))
     result["trap_score"] = round(trap_score, 1)
 
     # ── 维度2：带血程度（吸筹性价比）──
     avg_cost = result["avg_cost"]
     if avg_cost > 0:
-        # 当前价格低于平均成本多少
         discount = (avg_cost - current_price) / avg_cost * 100
     else:
         discount = 0.0
     result["discount_to_avg"] = round(discount, 2)
 
-    # 折扣评分（0-100）
-    # 折扣 0% → 0分，折扣 ≥ 40% → 满分
     blood_score = max(0.0, min(100.0, discount / 40 * 100))
     result["blood_score"] = round(blood_score, 1)
 
     # ── 维度3：上方压力（出货空间）──
-    # 套牢盘主要集中价位 = 70%筹码集中区间的上沿
     resistance_price = result["concentration_70_high"]
     if resistance_price > 0 and current_price > 0:
-        # 从当前价格到主要套牢盘的距离（拉升空间）
         upside = (resistance_price - current_price) / current_price * 100
     else:
         upside = 0.0
     result["upside_to_resistance"] = round(upside, 2)
     result["resistance_price"] = resistance_price
 
-    # 出货空间评分（0-100）
-    # 拉升空间 ≥ 50% → 满分，说明主力出货窗口很大
     exit_score = max(0.0, min(100.0, upside / 50 * 100))
     result["exit_score"] = round(exit_score, 1)
 
     # ── 维度4：筹码集中度变化（吸筹完成度）──
-    # 90%集中度区间越窄 = 筹码越集中 = 有大资金完成换手
     chip_range_90 = result["concentration_90_high"] - result["concentration_90_low"]
     chip_range_70 = result["concentration_70_high"] - result["concentration_70_low"]
 
     result["chip_range_90"] = round(chip_range_90, 2)
     result["chip_range_70"] = round(chip_range_70, 2)
 
-    # 近30日筹码集中度变化趋势
+    # 近30日筹码集中度变化趋势  ← BUG 1 已修复
     if len(chip_df) >= 30:
         past_chip = chip_df.iloc[-30]
-        past_range = float(past_chip.get("90集中度高", 0)) - float(
-            past_chip.get("90集中度低", 0)
+        past_range = float(past_chip.get("conc_90_high", 0)) - float(
+            past_chip.get("conc_90_low", 0)
         )
-        # 集中度收窄 = 筹码在向某个价位集中
         concentration_change = past_range - chip_range_90  # 正值 = 收窄
         result["concentration_tightening"] = round(concentration_change, 2)
     else:
         result["concentration_tightening"] = 0.0
 
-    # 集中度评分（筹码越集中越好，说明换手越完整）
-    # 相对于股价的区间宽度，越窄越集中
+    # 集中度评分
     relative_range = chip_range_70 / current_price * 100 if current_price > 0 else 100
     concentration_score = max(0.0, min(100.0, (1 - relative_range / 80) * 100))
     result["concentration_score"] = round(concentration_score, 1)
 
     # ── 综合收割成熟度评分 ──
-    # 套牢程度（0.35）+ 带血程度（0.30）+ 出货空间（0.25）+ 集中度（0.10）
     harvest_score = (
         trap_score * 0.35
         + blood_score * 0.30
@@ -671,9 +632,9 @@ def main() -> None:
         print(f"\n正在获取 [{code}] 数据，请稍候...\n")
         try:
             name = fetch_stock_name(code)
-            # fetch_chip_data 内部已获取 K 线，price_df 复用同一份数据
             chip_df = fetch_chip_data(code)
-            price_df = chip_df[["date", "close"] if "close" in chip_df.columns else ["date"]].copy() if not chip_df.empty else pd.DataFrame()
+
+            # BUG 2 已修复：删除了多余的 chip_df 赋值，直接用独立接口取最新价
             # chip_df 不含 close，用独立接口取最新价
             price_df = _fetch_kline_with_turnover(code, limit=5)
             if price_df.empty:
