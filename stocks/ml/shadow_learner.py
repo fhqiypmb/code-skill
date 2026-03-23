@@ -218,6 +218,30 @@ def record_signal(
         'actual_return':  None,
         'exit_price':     None,
         'exit_date':      None,
+
+        # 标注哪些字段是整合/派生得到的（训练时已排除，仅供参考）
+        '_derived_fields': {
+            'sr_score':                         '= an_success_rate_score 的快照冗余',
+            'an_success_rate_score':            '= dim_breakout*0.22 + dim_momentum*0.22 + dim_rs*0.18 + dim_capital*0.20 + dim_rr*0.10 + dim_reach_prob*0.08',
+            'an_success_rate_dim_reach_prob':   '= breakout_rate*0.4 + rr_factor*0.35 + vol_factor*0.25',
+            'an_success_rate_dim_rr':           '= an_technical_expected_gain_pct / an_technical_stop_loss_pct 的分档映射',
+            'an_success_rate_dim_momentum':     '= an_trend_score*0.7 + an_trend_macd_strength*0.3',
+            'an_success_rate_dim_rs':           '= an_market_pos_rs_score（完全相同）',
+            'an_trend_score':                   '= trend_detail_ma_align*0.30 + trend_detail_vol_price*0.40 + trend_detail_macd*0.30',
+            'an_market_pos_score':              '= an_market_pos_rs_score*0.5 + an_market_pos_vr_score*0.5',
+            'an_market_pos_rs_score':           '= an_market_pos_relative_strength 的分档打分',
+            'an_market_pos_vr_score':           '= an_market_pos_vol_ratio 的分档打分',
+            'an_technical_expected_gain_pct':   '= (target_price - current_price) / current_price',
+            'an_technical_stop_loss_pct':       '= (stop_loss - current_price) / current_price',
+            'an_technical_space_ok':            '= an_technical_expected_gain_pct >= 10.0',
+            'an_technical_target_price':        '= 压力位法/ATR通道法/斐波那契 三者取中位数',
+            'target_price':                     '= an_technical_target_price 的快照冗余',
+            'an_technical_ma20':                '= sc_ma20（完全相同）',
+            'close':                            '= sc_close（完全相同）',
+            'an_quote_price':                   '= sc_close（完全相同）',
+            'an_technical_current_price':       '= sc_close（完全相同）',
+            'stop_loss':                        '= an_technical_stop_loss（完全相同）',
+        },
     }
 
     data.append(record)
