@@ -319,6 +319,29 @@ def train() -> Optional[Any]:
         'date', 'code', 'name', 'period', 'signal_type', 'timestamp',
         'gold_cross_date', 'confirm_date', 'verdict', 'industry',
         'sr_grade', 'exit_date', 'reached_target', 'actual_return', 'exit_price',
+        # 排除综合评分/加权合成字段（它们是子参数的二次加工，会干扰模型对底层因子的学习）
+        'sr_score',                         # = an_success_rate_score 的冗余快照
+        'an_success_rate_score',            # 6个子维度的加权求和
+        'an_success_rate_dim_reach_prob',   # 多因子加权合成的到达概率
+        'an_success_rate_dim_rr',           # expected_gain / stop_loss 的分档映射，与子字段重复
+        'an_success_rate_dim_momentum',     # trend_score * 0.7 + macd_strength * 0.3
+        'an_success_rate_dim_rs',           # 直接等于 market_pos.rs_score，完全重复
+        'an_trend_score',                   # ma_score*0.3 + vp_score*0.4 + macd_score*0.3
+        'an_market_pos_score',              # rs_score*0.5 + vr_score*0.5
+        'an_market_pos_rs_score',           # relative_strength 的分档打分，与原始值重复
+        'an_market_pos_vr_score',           # vol_ratio 的分档打分，与原始值重复
+        # 排除派生/冗余的技术指标字段
+        'an_technical_expected_gain_pct',   # (target - price) / price，由子字段可推出
+        'an_technical_stop_loss_pct',       # (stop - price) / price，由子字段可推出
+        'an_technical_space_ok',            # expected_gain >= 10 的布尔映射
+        'an_technical_target_price',        # 压力位/ATR/斐波那契三法取中位数，整合结果
+        'target_price',                     # 同上，record层冗余快照
+        'an_technical_ma20',                # 与 sc_ma20 重复
+        # 排除重复的价格字段（同一个值存了多份，只保留一个）
+        'close',                            # 与 sc_close 相同
+        'an_quote_price',                   # 与 sc_close 相同
+        'an_technical_current_price',       # 与 sc_close 相同
+        'stop_loss',                        # 与 an_technical_stop_loss 相同
     }
     feature_fields = sorted({
         k for r in labeled for k, v in r.items()
