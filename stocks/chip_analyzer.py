@@ -474,27 +474,20 @@ def render_bar(score: float, width: int = 25) -> str:
 def print_report(code: str, name: str, r: dict) -> None:
     W = 62
     print("\n" + "=" * W)
-    print("  主力视角筹码收割分析")
+    print("  主力视角筹码收割分析（八维综合）")
     print("=" * W)
     print(f"  股票：{name}({code})")
     print(f"  当前价格：{r['current_price']:.2f} 元  ({r['price_date']})")
     print(f"  筹码数据：{r['chip_date']}")
     print("-" * W)
 
-    # 原收割成熟度评分
-    print(f"\n  +-- 收割成熟度评分 {'-' * 30}")
-    print(f"  |  {r['harvest_score']:5.1f} / 100")
-    print(f"  |  [{render_bar(r['harvest_score'])}]")
-    print(f"  |  {r['verdict']}")
-    print(f"  +{'-' * 45}")
-    print(f"\n  {r['verdict_desc']}")
-
+    # === 八维分析统一展示 ===
     print("\n" + "-" * W)
-    print("  筹码全景（主力视角四维分析）")
+    print("  八维综合分析")
     print("-" * W)
 
-    # 维度1-4（原版）
-    print(f"\n  * 维度 1：套牢深度（权重 35%）")
+    # 维度1：套牢深度
+    print(f"\n  * 维度 1：套牢深度（权重 12%）")
     print(f"     [{render_bar(r['trap_score'])}] {r['trap_score']:.0f}分")
     print(f"     当前获利比例：{r['profit_ratio']:.1f}%  |  被套比例：{r['loss_ratio']:.1f}%")
     if r["loss_ratio"] >= 80:
@@ -506,7 +499,8 @@ def print_report(code: str, name: str, r: dict) -> None:
     else:
         print(f"     -> 大多数人仍在盈利，不存在恐慌性抛售")
 
-    print(f"\n  * 维度 2：带血程度（权重 30%）")
+    # 维度2：带血程度
+    print(f"\n  * 维度 2：带血程度（权重 12%）")
     print(f"     [{render_bar(r['blood_score'])}] {r['blood_score']:.0f}分")
     print(f"     平均成本：{r['avg_cost']:.2f} 元  |  当前折价：{r['discount_to_avg']:.1f}%")
     if r["discount_to_avg"] >= 30:
@@ -518,7 +512,8 @@ def print_report(code: str, name: str, r: dict) -> None:
     else:
         print(f"     -> 筹码处于普遍获利状态")
 
-    print(f"\n  * 维度 3：出货空间（权重 25%）")
+    # 维度3：出货空间
+    print(f"\n  * 维度 3：出货空间（权重 10%）")
     print(f"     [{render_bar(r['exit_score'])}] {r['exit_score']:.0f}分")
     print(f"     主要套牢盘价位：{r['resistance_price']:.2f} 元  |  拉升空间：+{r['upside_to_resistance']:.1f}%")
     if r["upside_to_resistance"] >= 40:
@@ -528,7 +523,8 @@ def print_report(code: str, name: str, r: dict) -> None:
     else:
         print(f"     -> 拉升出货空间有限")
 
-    print(f"\n  * 维度 4：筹码集中度（权重 10%）")
+    # 维度4：筹码集中度
+    print(f"\n  * 维度 4：筹码集中度（权重 8%）")
     print(f"     [{render_bar(r['concentration_score'])}] {r['concentration_score']:.0f}分")
     print(f"     70%区间：{r['conc_70_low']:.2f}~{r['conc_70_high']:.2f}元")
     tightening = r["concentration_tightening"]
@@ -539,24 +535,23 @@ def print_report(code: str, name: str, r: dict) -> None:
     else:
         print(f"     近30日变化不明显")
 
-    # === 增强分析 ===
-    print("\n" + "=" * W)
-    print("  增强分析（主力行为识别）")
-    print("=" * W)
-
-    print(f"\n  * 增强维度1：筹码活跃度（权重15%）")
+    # 维度5：死筹比例
+    print(f"\n  * 维度 5：死筹比例（权重 15%）")
     print(f"     [{render_bar(r['dead_score'])}] {r['dead_score']:.0f}分")
     print(f"     {r['dead_desc_num']}  -> {r['dead_desc']}")
 
-    print(f"\n  * 增强维度2：筹码形态（权重15%）")
+    # 维度6：筹码形态
+    print(f"\n  * 维度 6：筹码形态（权重 15%）")
     print(f"     [{render_bar(r['pattern_score'])}] {r['pattern_score']:.0f}分")
     print(f"     {r['pattern_desc_num']}  -> {r['pattern_desc']}")
 
-    print(f"\n  * 增强维度3：主力成本护盘（权重15%）")
+    # 维度7：主力成本护盘
+    print(f"\n  * 维度 7：主力成本护盘（权重 15%）")
     print(f"     [{render_bar(r['cost_score'])}] {r['cost_score']:.0f}分")
     print(f"     {r['cost_desc_num']}  -> {r['cost_desc']}")
 
-    print(f"\n  * 增强维度4：拉升穿透力（权重13%）")
+    # 维度8：拉升穿透力
+    print(f"\n  * 维度 8：拉升穿透力（权重 13%）")
     print(f"     [{render_bar(r['penetration_score'])}] {r['penetration_score']:.0f}分")
     print(f"     {r['penetration_desc_num']}  -> {r['penetration_desc']}")
 
