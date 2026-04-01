@@ -151,19 +151,25 @@ except ImportError:
     DATA_SOURCE_AVAILABLE = False
 
 
-def _fetch_kline_with_turnover(code: str, limit: int = 210) -> pd.DataFrame:
+def _fetch_kline_with_turnover(code: str, limit: int = 210, include_today: bool = True) -> pd.DataFrame:
     """
     获取日线 K 线 + 真实换手率（hsl，单位%）
     优先腾讯 newfqkline 接口（稳定，f7=换手率）；失败则降级东方财富。
+
+    参数:
+        code: 股票代码
+        limit: 获取天数
+        include_today: 是否尝试获取当日实时数据（实盘模式）
+
     返回 DataFrame: date, open, close, high, low, volume, hsl(换手率%)
     """
     prefix = "sh" if code.startswith(("6", "9")) else "sz"
     symbol = f"{prefix}{code}"
+    df = pd.DataFrame()
 
     # ── 腾讯接口（主）──
     try:
         # 开始日期：往前推足够多天（limit*2 个自然日保证覆盖交易日）
-        from datetime import datetime, timedelta
         start_date = (datetime.today() - timedelta(days=limit * 2)).strftime("%Y-%m-%d")
         end_date = datetime.today().strftime("%Y-%m-%d")
         url = (
@@ -171,9 +177,8 @@ def _fetch_kline_with_turnover(code: str, limit: int = 210) -> pd.DataFrame:
             f"?_var=kline_dayqfq&param={symbol},day,{start_date},{end_date},{limit},qfq"
         )
         raw = _http_get(url)
-        import re as _re
         text = raw.decode("utf-8", errors="replace")
-        text = _re.sub(r"^kline_dayqfq=", "", text.strip())
+        text = re.sub(r"^kline_dayqfq=", "", text.strip())
         data = json.loads(text)
         days = data["data"][symbol].get("qfqday") or data["data"][symbol].get("day")
         rows = []
@@ -191,52 +196,116 @@ def _fetch_kline_with_turnover(code: str, limit: int = 210) -> pd.DataFrame:
                     "hsl": hsl,
                 })
         if rows:
-            return pd.DataFrame(rows)
+            df = pd.DataFrame(rows)
     except Exception:
         pass
 
     # ── 东方财富接口（备用）──
-    try:
-        market = 1 if code.startswith(("6", "9")) else 0
-        url = (
-            f"https://push2his.eastmoney.com/api/qt/stock/kline/get?"
-            f"secid={market}.{code}"
-            f"&fields1=f1,f2,f3,f4,f5,f6"
-            f"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
-            f"&klt=101&fqt=1&end=20500101&lmt={limit}"
-            f"&_={int(time.time() * 1000)}"
-        )
-        resp = _http_get_json(url)
-        klines: list = resp.get("data", {}).get("klines", []) if resp.get("data") else []
-        rows = []
-        for line in klines:
-            parts = line.split(",")
-            if len(parts) >= 11:
-                rows.append({
-                    "date": pd.to_datetime(parts[0]),
-                    "open": float(parts[1]),
-                    "close": float(parts[2]),
-                    "high": float(parts[3]),
-                    "low": float(parts[4]),
-                    "volume": float(parts[5]),
-                    "hsl": float(parts[10]) if parts[10] else 0.0,
-                })
-        if rows:
-            return pd.DataFrame(rows)
-    except Exception:
-        pass
+    if df.empty:
+        try:
+            market = 1 if code.startswith(("6", "9")) else 0
+            url = (
+                f"https://push2his.eastmoney.com/api/qt/stock/kline/get?"
+                f"secid={market}.{code}"
+                f"&fields1=f1,f2,f3,f4,f5,f6"
+                f"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
+                f"&klt=101&fqt=1&end=20500101&lmt={limit}"
+                f"&_={int(time.time() * 1000)}"
+            )
+            resp = _http_get_json(url)
+            klines: list = resp.get("data", {}).get("klines", []) if resp.get("data") else []
+            rows = []
+            for line in klines:
+                parts = line.split(",")
+                if len(parts) >= 11:
+                    rows.append({
+                        "date": pd.to_datetime(parts[0]),
+                        "open": float(parts[1]),
+                        "close": float(parts[2]),
+                        "high": float(parts[3]),
+                        "low": float(parts[4]),
+                        "volume": float(parts[5]),
+                        "hsl": float(parts[10]) if parts[10] else 0.0,
+                    })
+            if rows:
+                df = pd.DataFrame(rows)
+        except Exception:
+            pass
 
-    return pd.DataFrame()
+    # ── 实盘模式：尝试追加当日实时数据 ──
+    if include_today and not df.empty and DATA_SOURCE_AVAILABLE:
+        try:
+            today_df = _fetch_today_realtime_data(code, df)
+            if not today_df.empty:
+                # 移除已有的当天数据（如果有），追加实时数据
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                df = df[df["date"].dt.strftime("%Y-%m-%d") != today_str]
+                df = pd.concat([df, today_df], ignore_index=True)
+                df = df.sort_values("date").reset_index(drop=True)
+        except Exception as e:
+            # 实时数据获取失败不影响整体，继续使用历史数据
+            pass
+
+    return df
 
 
-def fetch_chip_data(code: str) -> pd.DataFrame:
+def _fetch_today_realtime_data(code: str, hist_df: pd.DataFrame) -> pd.DataFrame:
     """
-    获取筹码分布数据（基于通达信 CYQ 算法 - 筹码衰减模型）
-    """
-    # 优先用带真实换手率的接口（东方财富 f61=hsl）
-    temp_df = _fetch_kline_with_turnover(code, limit=210)
+    获取当日实时数据，用于实盘模式补充当天K线
 
-    # 降级：如果获取失败则用旧接口 + 估算换手率
+    返回包含当日实时数据的单行DataFrame
+    """
+    today = datetime.now()
+    today_str = today.strftime("%Y-%m-%d")
+
+    # 检查历史数据最后一天是否已经是今天
+    if not hist_df.empty:
+        last_date = hist_df["date"].iloc[-1]
+        if isinstance(last_date, str):
+            last_date = pd.to_datetime(last_date)
+        if last_date.strftime("%Y-%m-%d") == today_str:
+            # 今天的数据已经存在，无需补充
+            return pd.DataFrame()
+
+    # 获取实时行情
+    quote = fetch_realtime_quote(code)
+    if not quote or quote.get("price", 0) == 0:
+        return pd.DataFrame()
+
+    # 使用实时行情构建当日K线数据
+    # 注意：实时行情中的换手率是当日累计的
+    today_data = {
+        "date": pd.to_datetime(today_str),
+        "open": quote.get("open", 0),
+        "close": quote.get("price", 0),
+        "high": quote.get("high", 0),
+        "low": quote.get("low", 0),
+        "volume": float(quote.get("volume", 0)),
+        "hsl": float(quote.get("turnover_rate", 0)),  # 换手率%
+    }
+
+    # 验证数据有效性
+    if today_data["open"] <= 0 or today_data["close"] <= 0:
+        return pd.DataFrame()
+
+    return pd.DataFrame([today_data])
+
+
+def fetch_chip_data(code: str, realtime: bool = False) -> pd.DataFrame:
+    """
+    获取筹码分布数据（自实现 CYQ 算法 - 基于换手率衰减模型）
+
+    参数:
+        code: 股票代码
+        realtime: 是否启用实盘模式（尝试获取当日实时数据）
+
+    返回:
+        pd.DataFrame: 筹码数据
+    """
+    # 获取带换手率的K线数据
+    temp_df = _fetch_kline_with_turnover(code, limit=210, include_today=realtime)
+
+    # 二级降级：如果获取失败则用旧接口 + 估算换手率
     if temp_df.empty:
         if not DATA_SOURCE_AVAILABLE:
             raise ImportError("无法获取 K 线数据")
@@ -256,7 +325,12 @@ def fetch_chip_data(code: str) -> pd.DataFrame:
 
     results = []
 
-    # 对每个交易日计算筹码分布（完整对齐 akshare CYQCalculator JS 逻辑）
+    # ── 通达信 CYQ 算法核心实现 ──
+    # 关键改进点：
+    # 1. 使用更精细的价格分辨率 (factor=200)
+    # 2. 正确的三角形分布权重计算
+    # 3. 筹码衰减考虑历史换手率累积
+
     for i in range(len(records)):
         # 使用最近 120 日数据（range=120，同通达信默认）
         start = max(0, i - 119)
@@ -265,83 +339,135 @@ def fetch_chip_data(code: str) -> pd.DataFrame:
         if len(kdata) < 5:
             continue
 
-        factor = 150
+        # 提高价格分辨率，使结果更精确
+        factor = 200  # 通达信默认约200档位
         maxprice = max(r["high"] for r in kdata)
         minprice = min(r["low"] for r in kdata)
-        if maxprice == minprice:
-            continue
 
-        # accuracy 对齐 JS：(maxprice - minprice) / (factor - 1)
+        if maxprice == minprice:
+            # 价格区间为0时无法计算，使用最小分辨率
+            maxprice = minprice + 0.01
+
+        # accuracy: 价格步长，对齐通达信
         accuracy = max(0.01, (maxprice - minprice) / (factor - 1))
-        yrange = [round(minprice + accuracy * j, 2) for j in range(factor)]
+
+        # 初始化筹码数组
         xdata = [0.0] * factor
 
-        # 逐日叠加筹码（完整对齐 JS CYQCalculator）
-        for row in kdata:
-            open_p = row["open"]
-            close_p = row["close"]
-            high_p = row["high"]
-            low_p = row["low"]
-            avg = (open_p + close_p + high_p + low_p) / 4
-            # hsl 单位是 %，除以 100 得到比例，再 min(1, ...)
-            turnover = min(1.0, row["hsl"] / 100 if row["hsl"] else 0.0)
+        # ── 核心改进：正确的三角形分布算法 ──
+        # 通达信假设当日成交的筹码均匀分布在最低价到最高价之间
+        # 但权重按照成交均价位置呈三角形分布
 
-            # 筹码衰减（卖出）
-            xdata = [x * (1 - turnover) for x in xdata]
+        for day_idx, row in enumerate(kdata):
+            open_p = float(row["open"])
+            close_p = float(row["close"])
+            high_p = float(row["high"])
+            low_p = float(row["low"])
+            hsl = float(row.get("hsl", 0) or 0)  # 换手率 %
 
-            H = int((high_p - minprice) / accuracy)
-            L = int((low_p - minprice) / accuracy)  # JS 用 ceil，但 int 更接近实际
-            g_point = factor - 1 if high_p == low_p else 2 / (high_p - low_p)
+            if hsl <= 0:
+                continue
 
-            if high_p == low_p:
-                # 一字板：全部筹码叠加在 avg 对应档位
+            # 当日成交均价（通达信使用 (open+close+high+low)/4）
+            avg_price = (open_p + close_p + high_p + low_p) / 4.0
+
+            # 换手率转为衰减比例
+            turnover_rate = min(1.0, hsl / 100.0)
+
+            # ── 筹码衰减 ──
+            # 当日换手卖出，旧筹码按换手率衰减
+            # 这是通达信的核心逻辑：历史筹码会被新成交稀释
+            xdata = [x * (1 - turnover_rate) for x in xdata]
+
+            # ── 新筹码分布（三角形分布）──
+            price_range = high_p - low_p
+
+            if price_range <= 0:
+                # 一字板：筹码集中在一个价格点
                 idx = int((high_p - minprice) / accuracy)
                 if 0 <= idx < factor:
-                    xdata[idx] += g_point * turnover / 2
+                    # 一字板筹码量 = 换手率 * 成交量因子
+                    xdata[idx] += turnover_rate
             else:
-                for j in range(max(0, L), min(factor, H + 1)):
-                    curprice = minprice + accuracy * j
-                    if curprice <= avg:
-                        if abs(avg - low_p) < 1e-8:
-                            xdata[j] += g_point * turnover
-                        else:
-                            xdata[j] += (curprice - low_p) / (avg - low_p) * g_point * turnover
-                    else:
-                        if abs(high_p - avg) < 1e-8:
-                            xdata[j] += g_point * turnover
-                        else:
-                            xdata[j] += (high_p - curprice) / (high_p - avg) * g_point * turnover
+                # 正常交易日：三角形分布
+                # 通达信假设筹码在最低价到最高价之间均匀分布
+                # 但成交均价位置筹码最多，呈三角形
 
-        # 当前价格（kdata 是 list of dict）
-        current_price = kdata[-1]["close"]
+                L = int((low_p - minprice) / accuracy)
+                H = int((high_p - minprice) / accuracy)
+                L = max(0, L)
+                H = min(factor - 1, H)
+
+                # 三角形分布的峰值在均价位置
+                # 从最低价到均价：筹码量线性增加
+                # 从均价到最高价：筹码量线性减少
+
+                for j in range(L, H + 1):
+                    cur_price = minprice + accuracy * j
+
+                    # 计算当前价格位置的筹码权重
+                    if cur_price <= avg_price:
+                        # 价格低于均价：权重从最低价线性增加到均价
+                        if avg_price > low_p:
+                            weight = (cur_price - low_p) / (avg_price - low_p)
+                        else:
+                            weight = 1.0
+                    else:
+                        # 价格高于均价：权重从均价线性减少到最高价
+                        if high_p > avg_price:
+                            weight = (high_p - cur_price) / (high_p - avg_price)
+                        else:
+                            weight = 1.0
+
+                    # 筹码分布量 = 换手率 * 权重
+                    # 注意：需要归一化，使总筹码量等于换手率
+                    chip_amount = turnover_rate * weight
+
+                    # 归一化因子（三角形面积 = 底 * 高 / 2）
+                    # 底 = H - L + 1, 高 = 1 (峰值权重)
+                    triangle_area = (H - L + 1) / 2.0
+                    if triangle_area > 0:
+                        chip_amount = turnover_rate * weight / triangle_area
+
+                    xdata[j] += chip_amount
+
+        # ── 计算筹码指标 ──
+        current_price = float(kdata[-1]["close"])
         total_chips = sum(xdata)
 
-        if total_chips == 0:
+        if total_chips <= 0:
             continue
 
-        # 获利比例（对齐 JS getBenefitPart：price >= minprice + i*accuracy）
-        benefit_part = (
-            sum(x for j, x in enumerate(xdata) if current_price >= minprice + j * accuracy)
-            / total_chips
-        )
+        # 获利比例：当前价格以下的筹码占比
+        profit_chips = 0.0
+        for j, x in enumerate(xdata):
+            price_at_j = minprice + j * accuracy
+            if price_at_j <= current_price:
+                profit_chips += x
+        benefit_part = profit_chips / total_chips
 
-        # 平均成本（对齐 JS getCostByChip(totalChips * 0.5)）
+        # 平均成本：筹码累积中位数位置的价格
         def get_cost_by_chip(chip_target):
             cumsum = 0.0
             for j, x in enumerate(xdata):
-                if cumsum + x > chip_target:
-                    return round(minprice + j * accuracy, 2)
+                if cumsum + x >= chip_target:
+                    # 线性插值获取更精确的成本价格
+                    if cumsum < chip_target and x > 0:
+                        ratio = (chip_target - cumsum) / x
+                        return minprice + accuracy * (j + ratio)
+                    return minprice + accuracy * j
                 cumsum += x
-            return yrange[-1]
+            return minprice + accuracy * (factor - 1)
 
         avg_cost = get_cost_by_chip(total_chips * 0.5)
 
-        # 计算 90% 和 70% 成本区间（对齐 JS computePercentChips）
+        # 90% 和 70% 成本区间
         def get_percent_range(percent):
-            ps = [(1 - percent) / 2, (1 + percent) / 2]
+            lower_target = total_chips * (1 - percent) / 2
+            upper_target = total_chips * (1 + percent) / 2
             return [
-                get_cost_by_chip(total_chips * ps[0]),
-                get_cost_by_chip(total_chips * ps[1]),
+                get_cost_by_chip(lower_target),
+                get_cost_by_chip(upper_target),
             ]
 
         range_90 = get_percent_range(0.9)
@@ -351,11 +477,11 @@ def fetch_chip_data(code: str) -> pd.DataFrame:
             {
                 "date": kdata[-1]["date"],
                 "profit_ratio": benefit_part * 100,
-                "avg_cost": avg_cost,
-                "conc_90_low": range_90[0],
-                "conc_90_high": range_90[1],
-                "conc_70_low": range_70[0],
-                "conc_70_high": range_70[1],
+                "avg_cost": round(avg_cost, 2),
+                "conc_90_low": round(range_90[0], 2),
+                "conc_90_high": round(range_90[1], 2),
+                "conc_70_low": round(range_70[0], 2),
+                "conc_70_high": round(range_70[1], 2),
             }
         )
 
@@ -400,6 +526,11 @@ def fetch_stock_name(code: str) -> str:
 def analyze_chip(code: str, chip_df: pd.DataFrame, price_df: pd.DataFrame) -> dict:
     """
     主力视角四维分析
+
+    参数:
+        code: 股票代码
+        chip_df: 筹码数据DataFrame
+        price_df: 价格数据DataFrame
     """
     result = {}
 
@@ -615,11 +746,65 @@ def print_report(code: str, name: str, r: dict) -> None:
 # ─────────────────────────────────────────────────────────
 
 
+def is_trading_time() -> bool:
+    """
+    判断当前是否在A股交易时段内
+
+    A股交易时间：
+    - 上午：09:30 - 11:30
+    - 下午：13:00 - 15:00
+
+    返回：True 表示在交易时段内
+    """
+    now = datetime.now()
+    hour = now.hour
+    minute = now.minute
+    weekday = now.weekday()  # 0=周一, 6=周日
+
+    # 周末不交易
+    if weekday >= 5:  # 周六、周日
+        return False
+
+    # 上午交易时段：09:30 - 11:30
+    if hour == 9 and minute >= 30:
+        return True
+    if hour == 10:
+        return True
+    if hour == 11 and minute <= 30:
+        return True
+
+    # 下午交易时段：13:00 - 15:00
+    if hour == 13:
+        return True
+    if hour == 14:
+        return True
+    if hour == 15 and minute == 0:  # 15:00 整点算交易时间内（收盘时刻）
+        return True
+
+    return False
+
+
 def main() -> None:
     print("=" * 62)
     print("  主力视角筹码收割分析器")
     print("  站在主力角度，判断当前收割条件是否成熟")
     print("=" * 62)
+
+    # 自动判断是否在交易时段
+    realtime = is_trading_time()
+    now = datetime.now()
+    time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    weekday_str = weekday_names[now.weekday()]
+
+    if realtime:
+        print(f"\n  当前时间：{time_str} ({weekday_str})")
+        print("  >>> 正在交易时段，自动启用实盘模式 <<<")
+        print("  将获取当日实时数据进行筹码分析")
+    else:
+        print(f"\n  当前时间：{time_str} ({weekday_str})")
+        print("  >>> 非交易时段，使用历史模式 <<<")
+        print("  使用最近收盘数据进行筹码分析")
 
     while True:
         code = input("\n请输入股票代码（输入 q 退出）：").strip()
@@ -629,14 +814,14 @@ def main() -> None:
         if not code:
             continue
 
-        print(f"\n正在获取 [{code}] 数据，请稍候...\n")
+        mode_hint = "实盘" if realtime else "历史"
+        print(f"\n正在获取 [{code}] 数据（{mode_hint}模式），请稍候...\n")
         try:
             name = fetch_stock_name(code)
-            chip_df = fetch_chip_data(code)
+            chip_df = fetch_chip_data(code, realtime=realtime)
 
-            # BUG 2 已修复：删除了多余的 chip_df 赋值，直接用独立接口取最新价
-            # chip_df 不含 close，用独立接口取最新价
-            price_df = _fetch_kline_with_turnover(code, limit=5)
+            # 获取价格数据（保持与chip_df一致的模式）
+            price_df = _fetch_kline_with_turnover(code, limit=5, include_today=realtime)
             if price_df.empty:
                 price_df = fetch_price_data(code)
 
