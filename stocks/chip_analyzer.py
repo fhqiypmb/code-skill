@@ -104,10 +104,12 @@ except ImportError:
 
 
 def _fetch_kline_with_turnover(code: str, limit: int = 210, include_today: bool = True) -> pd.DataFrame:
+    """获取K线数据，支持盘中实时拼接当日行情"""
     prefix = "sh" if code.startswith(("6", "9")) else "sz"
     symbol = f"{prefix}{code}"
     df = pd.DataFrame()
 
+    # 1. 尝试腾讯API
     try:
         start_date = (datetime.today() - timedelta(days=limit * 2)).strftime("%Y-%m-%d")
         end_date = datetime.today().strftime("%Y-%m-%d")
@@ -124,6 +126,7 @@ def _fetch_kline_with_turnover(code: str, limit: int = 210, include_today: bool 
     except:
         pass
 
+    # 2. 备用：东方财富API
     if df.empty:
         try:
             market = 1 if code.startswith(("6", "9")) else 0
@@ -138,10 +141,61 @@ def _fetch_kline_with_turnover(code: str, limit: int = 210, include_today: bool 
         except:
             pass
 
+    # 3. 实盘模式：尝试追加当日实时数据（使用 data_source.py 的成熟实现）
+    if include_today and not df.empty and DATA_SOURCE_AVAILABLE:
+        try:
+            today_df = _fetch_today_realtime_data(code, df)
+            if not today_df.empty:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                df = df[df["date"].dt.strftime("%Y-%m-%d") != today_str]
+                df = pd.concat([df, today_df], ignore_index=True)
+                df = df.sort_values("date").reset_index(drop=True)
+        except:
+            pass  # 实时数据获取失败不影响整体
+
     if not df.empty:
         df = df.sort_values("date").reset_index(drop=True)
 
     return df
+
+
+def _fetch_today_realtime_data(code: str, hist_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    获取当日实时数据，用于实盘模式补充当天K线
+    返回包含当日实时数据的单行DataFrame
+    """
+    today = datetime.now()
+    today_str = today.strftime("%Y-%m-%d")
+
+    # 检查历史数据最后一天是否已经是今天
+    if not hist_df.empty:
+        last_date = hist_df["date"].iloc[-1]
+        if isinstance(last_date, str):
+            last_date = pd.to_datetime(last_date)
+        if last_date.strftime("%Y-%m-%d") == today_str:
+            return pd.DataFrame()  # 今天数据已存在
+
+    # 使用 data_source.py 的成熟实现获取实时行情
+    quote = fetch_realtime_quote(code)
+    if not quote or quote.get("price", 0) == 0:
+        return pd.DataFrame()
+
+    # 使用实时行情构建当日K线
+    today_data = {
+        "date": pd.to_datetime(today_str),
+        "open": quote.get("open", 0),
+        "close": quote.get("price", 0),
+        "high": quote.get("high", 0),
+        "low": quote.get("low", 0),
+        "volume": float(quote.get("volume", 0)),
+        "hsl": float(quote.get("turnover_rate", 0)),  # 换手率%
+    }
+
+    # 验证数据有效性
+    if today_data["open"] <= 0 or today_data["close"] <= 0:
+        return pd.DataFrame()
+
+    return pd.DataFrame([today_data])
 
 
 def fetch_chip_data(code: str, realtime: bool = False) -> pd.DataFrame:
@@ -355,10 +409,183 @@ def calc_penetration_score(chip_distribution, price_levels, current_price):
 
 
 # ─────────────────────────────────────────────────────────
+# 散户心态模拟（新增维度）
+# ─────────────────────────────────────────────────────────
+
+def calc_holder_sentiment(buy_price: float, current_price: float) -> dict:
+    """
+    散户心态模拟分析
+
+    根据买入价格与当前价格计算亏损比例，模拟绝大多数散户在不同亏损阶段的心理状态。
+    核心逻辑：当散户心态到达"极度恐慌无脑割肉"程度时，往往是主力拉升的最佳时机。
+    """
+    if buy_price <= 0 or current_price <= 0:
+        return {"error": "价格数据无效"}
+
+    # 计算亏损比例（负数为亏损）
+    loss_ratio = (current_price - buy_price) / buy_price * 100
+
+    result = {
+        "buy_price": buy_price,
+        "current_price": current_price,
+        "loss_ratio": round(loss_ratio, 2),
+        "loss_amount": round(buy_price - current_price, 2),
+    }
+
+    # 心态阶段判定（亏损比例越低，心态越崩）
+    if loss_ratio >= 0:
+        # 盈利状态
+        result["stage"] = "盈利期"
+        result["stage_emoji"] = "[^_^]"
+        result["mindset"] = "赚钱了，心情不错"
+        result["behavior"] = "可能获利了结或继续持有"
+        result["panic_score"] = 0
+        result["sentiment_desc"] = "散户情绪稳定，无恐慌压力"
+        result["signal"] = "无信号"
+        result["signal_desc"] = "盈利状态下，散户不会割肉，主力难以低成本吸筹"
+
+    elif loss_ratio >= -5:
+        # 小亏，不服气
+        result["stage"] = "微亏期"
+        result["stage_emoji"] = "[:-)]"
+        result["mindset"] = "小亏而已，很正常"
+        result["behavior"] = "观望、补仓，不认为是错误"
+        result["panic_score"] = 10
+        result["sentiment_desc"] = "散户心态平稳，认为只是正常波动"
+        result["signal"] = "无信号"
+        result["signal_desc"] = "散户还在幻想反弹，不会割肉"
+
+    elif loss_ratio >= -10:
+        # 焦虑期
+        result["stage"] = "焦虑期"
+        result["stage_emoji"] = "[:-|]"
+        result["mindset"] = "有点慌了，要不要止损？"
+        result["behavior"] = "频繁看盘，犹豫不决，开始怀疑"
+        result["panic_score"] = 25
+        result["sentiment_desc"] = "散户开始焦虑，但还抱有幻想"
+        result["signal"] = "观望"
+        result["signal_desc"] = "部分散户开始动摇，但大多数人还在扛"
+
+    elif loss_ratio >= -20:
+        # 痛苦期
+        result["stage"] = "痛苦期"
+        result["stage_emoji"] = "[;_( ]"
+        result["mindset"] = "亏太多了，怎么办..."
+        result["behavior"] = "睡不着觉，反复纠结，不敢告诉家人"
+        result["panic_score"] = 45
+        result["sentiment_desc"] = "散户内心煎熬，在割与不割间挣扎"
+        result["signal"] = "关注"
+        result["signal_desc"] = "散户心态开始崩溃，主力可逐步建仓"
+
+    elif loss_ratio >= -30:
+        # 崩溃期（关键节点）
+        result["stage"] = "崩溃期"
+        result["stage_emoji"] = "[>_<]"
+        result["mindset"] = "受不了了！割肉算了！"
+        result["behavior"] = "情绪崩溃，频繁查看账户，考虑清仓"
+        result["panic_score"] = 65
+        result["sentiment_desc"] = "散户心理防线崩溃，极易无脑割肉"
+        result["signal"] = "[!!] 买入信号"
+        result["signal_desc"] = "绝大多数散户撑不住了，正是主力吸筹黄金期"
+
+    elif loss_ratio >= -40:
+        # 绝望期（关键节点）
+        result["stage"] = "绝望期"
+        result["stage_emoji"] = "[X_X]"
+        result["mindset"] = "彻底没希望了，清仓走人"
+        result["behavior"] = "心如死灰，不再看盘，决定割肉离场"
+        result["panic_score"] = 80
+        result["sentiment_desc"] = "散户彻底绝望，割肉意愿极强"
+        result["signal"] = "[***] 强买入信号"
+        result["signal_desc"] = "散户大规模割肉，主力吸筹接近完成，拉升在即！"
+
+    elif loss_ratio >= -50:
+        # 躺平期
+        result["stage"] = "躺平期"
+        result["stage_emoji"] = "[-_-]"
+        result["mindset"] = "懒得看了，随它去吧"
+        result["behavior"] = "死猪不怕开水烫，删软件不看盘"
+        result["panic_score"] = 70
+        result["sentiment_desc"] = "散户已经麻木，割肉动力反而下降"
+        result["signal"] = "[!] 买入信号"
+        result["signal_desc"] = "散户筹码已锁定，主力拉升阻力较小"
+
+    elif loss_ratio >= -60:
+        # 深度套牢期
+        result["stage"] = "深套期"
+        result["stage_emoji"] = "[=_=]"
+        result["mindset"] = "已经无所谓了..."
+        result["behavior"] = "彻底放弃，等解套再说"
+        result["panic_score"] = 60
+        result["sentiment_desc"] = "散户已躺平，筹码基本不动"
+        result["signal"] = "关注"
+        result["signal_desc"] = "散户筹码锁定，但拉升需要较强动力"
+
+    else:
+        # 极端深度套牢
+        result["stage"] = "死筹期"
+        result["stage_emoji"] = "[@_@]"
+        result["mindset"] = "忘记还有这只股票了"
+        result["behavior"] = "账户都不想打开"
+        result["panic_score"] = 50
+        result["sentiment_desc"] = "散户彻底放弃，筹码变成死筹"
+        result["signal"] = "中性"
+        result["signal_desc"] = "筹码锁定极强，但需要大利好才能激活"
+
+    # 计算距离关键心理关口（正确逻辑）
+    stages = [
+        (-5, "焦虑期临界点"),
+        (-10, "痛苦期临界点"),
+        (-20, "崩溃期临界点"),
+        (-30, "绝望期临界点"),
+        (-40, "躺平期临界点"),
+    ]
+
+    distances = []
+    for threshold, name in stages:
+        # threshold是临界点（如-5表示亏损5%的关口）
+        # loss_ratio是当前亏损（如-30表示亏损30%）
+        # 如果当前亏损更深（更负），说明已经过了这个关口
+        dist = abs(loss_ratio - threshold)  # 距离该关口的幅度
+        if loss_ratio <= threshold:  # 当前亏损比临界点更深 = 已跌破
+            distances.append((name, round(dist, 1), f"已跌破{dist:.1f}%"))
+        else:  # 当前亏损比临界点更浅 = 还需跌
+            distances.append((name, round(dist, 1), f"还需跌{dist:.1f}%"))
+
+    result["stage_distances"] = distances
+
+    # 拉升时机评分（综合评分，越高说明越适合拉升）
+    # 最优区间是 -30% 到 -40%（绝望期）
+    if -40 <= loss_ratio <= -25:
+        result["timing_score"] = 100
+        result["timing_desc"] = "★★★ 最佳拉升时机 ★★★"
+    elif -50 <= loss_ratio <= -20:
+        result["timing_score"] = 85
+        result["timing_desc"] = "★★☆ 次佳拉升时机"
+    elif -60 <= loss_ratio <= -10:
+        result["timing_score"] = 60
+        result["timing_desc"] = "★☆☆ 可考虑拉升"
+    elif loss_ratio >= 0:
+        result["timing_score"] = 20
+        result["timing_desc"] = "不建议拉升（散户盈利）"
+    else:
+        result["timing_score"] = 40
+        result["timing_desc"] = "拉升阻力较大"
+
+    return result
+
+
+def render_sentiment_bar(panic_score: float, width: int = 20) -> str:
+    """渲染恐慌程度条"""
+    filled = int(panic_score / 100 * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+# ─────────────────────────────────────────────────────────
 # 核心分析
 # ─────────────────────────────────────────────────────────
 
-def analyze_chip(code: str, chip_df: pd.DataFrame, price_df: pd.DataFrame) -> dict:
+def analyze_chip(code: str, chip_df: pd.DataFrame, price_df: pd.DataFrame, buy_price: float = None) -> dict:
     """主力视角八维分析"""
     result = {}
     latest = chip_df.iloc[-1]
@@ -463,6 +690,11 @@ def analyze_chip(code: str, chip_df: pd.DataFrame, price_df: pd.DataFrame) -> di
         result["final_verdict"] = "[不买]"
         result["final_desc"] = "不具备买入条件，大多数筹码获利，无收割空间"
 
+    # === 散户心态模拟分析（新增） ===
+    result["holder_sentiment"] = None
+    if buy_price and buy_price > 0:
+        result["holder_sentiment"] = calc_holder_sentiment(buy_price, current_price)
+
     return result
 
 
@@ -479,6 +711,12 @@ def print_report(code: str, name: str, r: dict) -> None:
     print(f"  股票：{name}({code})")
     print(f"  当前价格：{r['current_price']:.2f} 元  ({r['price_date']})")
     print(f"  筹码数据：{r['chip_date']}")
+
+    # 显示买入价格（如果有）
+    if r.get("holder_sentiment"):
+        hs = r["holder_sentiment"]
+        print(f"  买入价格：{hs['buy_price']:.2f} 元")
+
     print("-" * W)
 
     # === 八维分析统一展示 ===
@@ -574,6 +812,47 @@ def print_report(code: str, name: str, r: dict) -> None:
         bar = render_bar(score, 15)
         print(f"    {i+1}.{dim}: {score:>5.1f}分 [{bar}]")
 
+    # === 散户心态模拟分析（新增模块） ===
+    if r.get("holder_sentiment"):
+        hs = r["holder_sentiment"]
+        print("\n" + "=" * W)
+        print("  散户心态模拟分析（你的买入价视角）")
+        print("=" * W)
+
+        # 基本信息行
+        profit_symbol = "📈" if hs['loss_ratio'] >= 0 else "📉"
+        print(f"\n  {profit_symbol} 买入价：{hs['buy_price']:.2f} 元")
+        print(f"     当前价：{hs['current_price']:.2f} 元")
+
+        if hs['loss_ratio'] >= 0:
+            print(f"     盈亏：+{abs(hs['loss_ratio']):.1f}% (盈利 {abs(hs['loss_amount']):.2f} 元)")
+        else:
+            print(f"     盈亏：{hs['loss_ratio']:.1f}% (亏损 {abs(hs['loss_amount']):.2f} 元)")
+
+        # 心态阶段
+        print(f"\n  {'─' * 28}")
+        print(f"   心态阶段：{hs['stage_emoji']} {hs['stage']}")
+        print(f"  {'─' * 28}")
+        print(f"     散户心理：\"{hs['mindset']}\"")
+        print(f"     典型行为：{hs['behavior']}")
+        print(f"     恐慌程度：[{render_sentiment_bar(hs['panic_score'])}] {hs['panic_score']}分")
+
+        # 心理关口距离
+        print(f"\n  📍 关键心理关口：")
+        for stage_name, dist, desc in hs['stage_distances'][:4]:
+            print(f"     • {stage_name}：{desc}")
+
+        # 拉升时机评分
+        print(f"\n  ⏰ 拉升时机评分：{hs['timing_score']}分")
+        print(f"     {hs['timing_desc']}")
+
+        # 核心结论
+        print(f"\n  {'=' * 28}")
+        print(f"   {hs['signal']}")
+        print(f"  {'=' * 28}")
+        print(f"     {hs['signal_desc']}")
+        print(f"\n     {hs['sentiment_desc']}")
+
     print("\n" + "-" * W)
     print("  本工具仅供研究，不构成投资建议")
     print("=" * W + "\n")
@@ -590,7 +869,7 @@ def is_trading_time() -> bool:
 def main():
     print("=" * 62)
     print("  主力视角筹码收割分析器")
-    print("  原四维 + 增强四维 = 八维综合分析")
+    print("  原四维 + 增强四维 + 散户心态模拟 = 九维综合分析")
     print("=" * 62)
 
     realtime = is_trading_time()
@@ -604,6 +883,19 @@ def main():
         if not code:
             continue
 
+        # 买入价格输入（可选）
+        buy_price = None
+        buy_price_input = input("请输入你的买入价格（直接回车跳过）：").strip()
+        if buy_price_input:
+            try:
+                buy_price = float(buy_price_input)
+                if buy_price <= 0:
+                    print("买入价格必须大于0，已跳过心态分析")
+                    buy_price = None
+            except ValueError:
+                print("价格格式无效，已跳过心态分析")
+                buy_price = None
+
         print(f"\n正在获取 [{code}] 数据，请稍候...\n")
         try:
             name = fetch_stock_name(code)
@@ -614,7 +906,7 @@ def main():
                 print("数据为空，请检查股票代码")
                 continue
 
-            result = analyze_chip(code, chip_df, price_df)
+            result = analyze_chip(code, chip_df, price_df, buy_price=buy_price)
             print_report(code, name, result)
         except Exception as e:
             print(f"分析失败：{e}")
