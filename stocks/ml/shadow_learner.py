@@ -598,6 +598,67 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
     logger.info(f"模型报告已保存: {report_file}")
 
 
+# ==================== 仅预测用的特征构造 ====================
+
+def _build_predict_features(
+    code: str,
+    name: str,
+    period: str,
+    signal_type: str,
+    screener_details: Dict,
+    analysis: Dict,
+) -> Dict:
+    """
+    构造与 record_signal 相同结构的特征字典，但不写入文件。
+    仅用于本地手动选股时的 ML 预测。
+    """
+    from datetime import datetime as _dt
+    today = _dt.now().strftime('%Y-%m-%d')
+
+    # 打平 screener_details 的数值型字段
+    screener_feats = {}
+    for k, v in screener_details.items():
+        if isinstance(v, (int, float, bool)):
+            screener_feats[f'sc_{k}'] = float(v) if isinstance(v, bool) else v
+
+    # 打平 analysis 的所有字段（递归）
+    analysis_feats = {}
+    def _flatten(d: Dict, prefix: str = 'an'):
+        for k, v in d.items():
+            key = f'{prefix}_{k}'
+            if isinstance(v, dict):
+                _flatten(v, key)
+            elif isinstance(v, (int, float, bool)):
+                analysis_feats[key] = float(v) if isinstance(v, bool) else v
+            elif isinstance(v, str) and v:
+                analysis_feats[key] = v
+    _flatten(analysis)
+
+    sr   = analysis.get('success_rate', {})
+    tech = analysis.get('technical', {})
+
+    record = {
+        'date':        today,
+        'code':        code,
+        'name':        name,
+        'period':      period,
+        'signal_type': signal_type,
+        'timestamp':   time.time(),
+        'close':           screener_details.get('close', 0),
+        'gold_cross_date': screener_details.get('gold_cross_date', ''),
+        'confirm_date':    screener_details.get('date', ''),
+        'verdict':      analysis.get('verdict', ''),
+        'industry':     analysis.get('industry', ''),
+        'sr_score':     sr.get('score', 0),
+        'sr_grade':     sr.get('grade', ''),
+        'target_price': tech.get('target_price', 0),
+        'stop_loss':    tech.get('stop_loss', 0),
+        **screener_feats,
+        **analysis_feats,
+    }
+    return record
+
+
 # ==================== 预测 ====================
 
 def predict(record: Dict) -> Optional[float]:
@@ -629,20 +690,34 @@ def record_and_predict(
     signal_type: str,
     screener_details: Dict,
     analysis: Dict,
+    save: bool = True,
 ) -> Optional[float]:
     """
     记录信号 + 立即预测达标概率，一步完成。
     返回概率(0-100)，模型不存在或失败返回 None。
-    本地和 GitHub Actions 统一调用此函数。
+
+    参数:
+        save: 是否将信号写入 shadow_data.json。
+              True  → 记录+预测（GitHub Actions / monitor.py 使用）
+              False → 仅预测不记录（本地手动选股使用，避免污染数据）
     """
     for attempt in range(1, 4):
         try:
-            record = record_signal(
-                code=code, name=name,
-                period=period, signal_type=signal_type,
-                screener_details=screener_details,
-                analysis=analysis,
-            )
+            if save:
+                record = record_signal(
+                    code=code, name=name,
+                    period=period, signal_type=signal_type,
+                    screener_details=screener_details,
+                    analysis=analysis,
+                )
+            else:
+                # 仅构造临时特征字典用于预测，不写文件
+                record = _build_predict_features(
+                    code=code, name=name,
+                    period=period, signal_type=signal_type,
+                    screener_details=screener_details,
+                    analysis=analysis,
+                )
             return predict(record) if record else None
         except Exception as e:
             import traceback

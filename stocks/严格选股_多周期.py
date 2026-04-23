@@ -1448,7 +1448,7 @@ def test_single_stock(period: str, period_name: str):
         except Exception as e:
             print(f"\n  基本面分析失败: {e}")
 
-        # ---- ML记录+预测 ----
+        # ---- ML预测（本地不写入数据文件） ----
         try:
             import sys as _sys
             _ml_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml')
@@ -1459,12 +1459,13 @@ def test_single_stock(period: str, period_name: str):
                 code=code, name=stock_name,
                 period=period_name, signal_type=sig_type,
                 screener_details=details, analysis=analysis,
+                save=_is_ci(),  # 本地仅预测不记录，CI环境才写入
             )
             print(f"\n{'=' * 60}")
             if ml_prob is not None:
                 print(f"  ML达标概率: {ml_prob}%")
             else:
-                print(f"  ML: 数据已记录，模型尚未训练（样本不足50条）")
+                print(f"  ML: 模型尚未训练（样本不足50条）")
             print(f"{'=' * 60}")
         except Exception as e:
             print(f"\n  ML预测失败: {e}")
@@ -1523,7 +1524,7 @@ def main():
             print(f"  ML模块加载失败（不影响选股）: {_e}")
 
         def _on_signal_local(code, name, signal_type, details):
-            """扫到信号：做基本面分析（打印报告） + ML写入"""
+            """扫到信号：做基本面分析（打印报告） + ML预测（本地不写入数据）"""
             analysis = {}
             if _analyzer_mod:
                 try:
@@ -1539,13 +1540,14 @@ def main():
                         code=code, name=name,
                         period=period_name, signal_type=signal_type,
                         screener_details=details, analysis=analysis,
+                        save=_is_ci(),  # 本地仅预测不记录，CI环境才写入
                     )
                     if ml_prob is not None:
                         print(f"  ML达标概率: {ml_prob}%  [{period_name}][{signal_type}]")
                     else:
-                        print(f"  ML: 数据已记录，模型尚未训练（样本不足50条）")
+                        print(f"  ML: 模型尚未训练（样本不足50条）")
                 except Exception as _e:
-                    print(f"  ML写入失败 {code}: {_e}")
+                    print(f"  ML预测失败 {code}: {_e}")
 
         normal_results, strict_results = screener.screen_all_stocks(
             stock_list, on_signal=_on_signal_local

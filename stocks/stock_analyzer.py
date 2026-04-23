@@ -102,17 +102,17 @@ def _standard_ema(data: List[float], period: int) -> List[float]:
     """
     if len(data) < period:
         return data
-    
+
     result = []
     # 前 period 项求简单平均作为初值
     ema_val = sum(data[:period]) / period
     result.append(ema_val)
-    
+
     k = 2.0 / (period + 1)
     for i in range(period, len(data)):
         ema_val = data[i] * k + ema_val * (1 - k)
         result.append(ema_val)
-    
+
     return result
 
 
@@ -198,14 +198,14 @@ def calc_target_price(klines: List[KLineBar], current_price: float) -> Technical
     ma20 = _ma(closes, 20)
     if ma20 is None:
         ma20 = current_price * 0.95
-    
+
     # 方法2：近 5 日最低点
     recent5 = klines[-5:] if len(klines) >= 5 else klines
     swing_low_5d = min(float(k['low']) for k in recent5)
-    
+
     # 方法3：MA20 下方 0.5 倍 ATR（考虑正常波动）
     stop_by_atr = max(ma20 * 0.98, ma20 - atr * 0.5) if atr > 0 else ma20
-    
+
     # 取三者中的最高值（最安全）
     stop = max(ma20 * 0.95, swing_low_5d, stop_by_atr)
     stop = min(stop, current_price * 0.88)  # 不超过 12% 的止损
@@ -320,12 +320,12 @@ def calc_trend_strength(klines: List[KLineBar]) -> TrendStrength:
         # 使用标准 EMA 计算
         ema12 = _standard_ema(closes, 12)
         ema26 = _standard_ema(closes, 26)
-        
+
         # 对齐长度
         min_len = min(len(ema12), len(ema26))
         ema12 = ema12[-min_len:]
         ema26 = ema26[-min_len:]
-        
+
         dif = [a - b for a, b in zip(ema12, ema26)]
         dea = _standard_ema(dif, 9) if len(dif) >= 9 else dif
 
@@ -503,7 +503,7 @@ def _calc_reach_probability(klines: List[KLineBar], target: float,
     # 因子1：历史突破率（近 60 日）
     recent60 = klines[-60:] if len(klines) >= 60 else klines
     swing_high = max(float(k['high']) for k in recent60)
-    
+
     # 目标价距离当前价的相对高度
     target_height = (target - current) / current * 100
     swing_height = (swing_high - current) / current * 100
@@ -563,7 +563,7 @@ def calc_success_rate(
     - 趋势动能结合 MACD 强度
     - 资金持续性改为百分比评分（支持不同市值）
     - 加入到达概率维度
-    
+
     维度权重（6维）：
       突破质量  22% — 信号本身的可靠性
       趋势动能  22% — 趋势能否持续推动到目标价
@@ -571,7 +571,7 @@ def calc_success_rate(
       资金持续性 20% — 资金是否持续流入
       风险收益比  10% — 同样涨10%，亏损空间越小越好
       到达概率   8% — 历史上有多容易突破到目标
-    
+
     等级：S≥80 / A≥65 / B≥50 / C≥35 / D<35
     """
     closes  = [float(k['close']) for k in klines] if klines else []
@@ -652,7 +652,7 @@ def calc_success_rate(
     # ── 维度5：风险收益比 ─────────────────────────────────────────
     gain   = technical.get('expected_gain_pct', 10.0)
     sl_pct = abs(technical.get('stop_loss_pct', -5.0))
-    
+
     # 改进：加入止损幅度的合理性检查
     if sl_pct < 1.5:
         # 止损空间太小，即使收益高也有风险
@@ -1008,7 +1008,49 @@ def main() -> None:
     if not stocks:
         print("  无有效代码")
         return
-    analyze_stocks_batch(stocks)
+    results = analyze_stocks_batch(stocks)
+
+    # ---- ML 预测（仅预测不写入数据文件） ----
+    _ml_mod = None
+    try:
+        import os as _os
+        _ml_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'ml')
+        if _ml_dir not in sys.path:
+            sys.path.insert(0, _ml_dir)
+        import shadow_learner as _ml_mod
+    except Exception as _e:
+        print(f"  ML模块加载失败: {_e}")
+
+    if _ml_mod:
+        ml_results = []
+        for r in results:
+            code = r.get('code', '')
+            name = r.get('name', '')
+            if r.get('verdict') == '失败':
+                continue
+            try:
+                ml_prob = _ml_mod.record_and_predict(
+                    code=code, name=name,
+                    period='日线', signal_type=r.get('signal_type', ''),
+                    screener_details={
+                        'close': r.get('quote', {}).get('price', 0),
+                        'date': datetime.now().strftime('%Y-%m-%d'),
+                    },
+                    analysis=r,
+                    save=False,  # 本地仅预测不记录
+                )
+                if ml_prob is not None:
+                    ml_results.append((code, name, ml_prob))
+            except Exception as _e:
+                print(f"  ML预测失败 {code}: {_e}")
+
+        if ml_results:
+            print(f"\n{'=' * 62}")
+            print(f"  ML 达标概率预测")
+            print(f"  {'─' * 56}")
+            for code, name, prob in ml_results:
+                print(f"    {code} {name:<8}  ML达标概率: {prob}%")
+            print(f"{'=' * 62}")
 
 
 if __name__ == "__main__":
