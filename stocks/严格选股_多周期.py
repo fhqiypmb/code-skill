@@ -1454,7 +1454,7 @@ def test_single_stock(period: str, period_name: str):
             _ml_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml')
             if _ml_dir not in _sys.path:
                 _sys.path.insert(0, _ml_dir)
-            import shadow_learner as _ml_mod
+            import shadow_learner as _ml_mod  # type: ignore[reportMissingImports]
             ml_prob = _ml_mod.record_and_predict(
                 code=code, name=stock_name,
                 period=period_name, signal_type=sig_type,
@@ -1519,7 +1519,7 @@ def main():
             _ml_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml')
             if _ml_dir not in _sys.path:
                 _sys.path.insert(0, _ml_dir)
-            import shadow_learner as _ml_mod
+            import shadow_learner as _ml_mod  # type: ignore[reportMissingImports]
         except Exception as _e:
             print(f"  ML模块加载失败（不影响选股）: {_e}")
 
