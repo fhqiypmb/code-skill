@@ -161,19 +161,14 @@ def _fetch_kline_with_turnover(code: str, limit: int = 210, include_today: bool 
 
 def _fetch_today_realtime_data(code: str, hist_df: pd.DataFrame) -> pd.DataFrame:
     """
-    获取当日实时数据，用于实盘模式补充当天K线
+    获取当日实时数据，用于实盘模式补充/替换当天K线
     返回包含当日实时数据的单行DataFrame
+
+    注意：不复用K线API中的当天行，因为K线API返回的当天close可能是
+    开盘价或缓存旧价，并非真实实时最新价。始终用实时行情API覆盖。
     """
     today = datetime.now()
     today_str = today.strftime("%Y-%m-%d")
-
-    # 检查历史数据最后一天是否已经是今天
-    if not hist_df.empty:
-        last_date = hist_df["date"].iloc[-1]
-        if isinstance(last_date, str):
-            last_date = pd.to_datetime(last_date)
-        if last_date.strftime("%Y-%m-%d") == today_str:
-            return pd.DataFrame()  # 今天数据已存在
 
     # 使用 data_source.py 的成熟实现获取实时行情
     quote = fetch_realtime_quote(code)
