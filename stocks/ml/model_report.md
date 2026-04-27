@@ -1,75 +1,75 @@
 # ML模型分析报告
 
-> **训练日期**: 2026-04-20（模型最近一次训练的日期，每周一自动更新）  
-> **样本数**: 927（已回填实际涨跌结果的历史信号数量）  
-> **训练集准确率**: 100.00%  |  **测试集准确率**: 94.09%
+> **训练日期**: 2026-04-27（模型最近一次训练的日期，每周一自动更新）  
+> **样本数**: 1173（已回填实际涨跌结果的历史信号数量）  
+> **训练集准确率**: 99.89%  |  **测试集准确率**: 94.04%
 
 ## 按周期达标率
 | 周期 | 总信号 | 达标数 | 达标率 |
 |------|--------|--------|--------|
-| 30分钟 | 146 | 13 | 8.9% |
+| 30分钟 | 213 | 16 | 7.5% |
 | 30分钟线 | 1 | 0 | 0.0% |
-| 5分钟 | 646 | 39 | 6.0% |
+| 5分钟 | 802 | 51 | 6.4% |
 | 5分钟线 | 1 | 0 | 0.0% |
-| 日线 | 133 | 14 | 10.5% |
+| 日线 | 156 | 19 | 12.2% |
 
 ## 按信号类型达标率
 信号类型说明：**筑底**=底部企稳反弹、**突破**=放量突破压力位、**严格**=金叉严格条件全满足、**普通**=金叉基本条件满足
 
 | 信号类型 | 总信号 | 达标数 | 达标率 |
 |----------|--------|--------|--------|
-| 突破 | 193 | 4 | 2.1% |
-| 严格 | 252 | 13 | 5.2% |
-| 普通 | 482 | 49 | 10.2% |
+| 突破 | 245 | 9 | 3.7% |
+| 严格 | 322 | 20 | 6.2% |
+| 普通 | 606 | 57 | 9.4% |
 
 ## 特征重要性 TOP20
 越靠前的特征对模型预测影响越大，可理解为「决定上涨概率的关键因子」。
 
 | 排名 | 特征名 | 重要性得分 |
 |------|--------|------------|
-| 1 | `an_quote_volume` | 0.0533 |
-| 2 | `an_quote_change_pct` | 0.0519 |
-| 3 | `an_capital_flow_ratio` | 0.0439 |
-| 4 | `an_capital_main_net_in` | 0.0412 |
-| 5 | `an_technical_atr` | 0.0392 |
-| 6 | `an_quote_turnover_rate` | 0.0392 |
-| 7 | `an_trend_detail_vol_price` | 0.0379 |
-| 8 | `an_quote_amount` | 0.0374 |
-| 9 | `sc_days_since_gold` | 0.0330 |
-| 10 | `sc_volume` | 0.0319 |
-| 11 | `an_capital_big_net_in` | 0.0313 |
-| 12 | `an_market_pos_relative_strength` | 0.0312 |
-| 13 | `sc_first_double_vol` | 0.0307 |
-| 14 | `sc_yin_vol` | 0.0294 |
-| 15 | `an_technical_method_targets_ATR通道法` | 0.0289 |
-| 16 | `an_technical_method_targets_斐波那契` | 0.0284 |
-| 17 | `an_quote_pre_close` | 0.0273 |
-| 18 | `an_quote_high` | 0.0267 |
-| 19 | `an_quote_open` | 0.0262 |
-| 20 | `sc_ma20` | 0.0250 |
+| 1 | `an_market_pos_relative_strength` | 0.0508 |
+| 2 | `an_quote_volume` | 0.0476 |
+| 3 | `an_quote_turnover_rate` | 0.0475 |
+| 4 | `an_quote_change_pct` | 0.0450 |
+| 5 | `an_technical_atr` | 0.0409 |
+| 6 | `an_capital_super_net_in` | 0.0353 |
+| 7 | `an_capital_main_net_in` | 0.0348 |
+| 8 | `an_capital_flow_ratio` | 0.0343 |
+| 9 | `an_trend_detail_vol_price` | 0.0329 |
+| 10 | `sc_days_since_gold` | 0.0324 |
+| 11 | `an_capital_big_net_in` | 0.0319 |
+| 12 | `sc_yin_vol` | 0.0309 |
+| 13 | `sc_gold_day_vol` | 0.0302 |
+| 14 | `sc_first_double_vol` | 0.0293 |
+| 15 | `an_technical_method_targets_ATR通道法` | 0.0290 |
+| 16 | `an_quote_open` | 0.0286 |
+| 17 | `an_quote_low` | 0.0267 |
+| 18 | `an_quote_high` | 0.0264 |
+| 19 | `an_technical_method_targets_斐波那契` | 0.0264 |
+| 20 | `sc_volume` | 0.0257 |
 
 ## 高达标 vs 低达标信号特征对比
 对比达标(1)和未达标(0)样本的特征均值，差异大的特征是区分好坏信号的关键。
 
 | 特征名 | 达标均值 | 未达标均值 | 差异 |
 |--------|----------|------------|------|
-| `an_quote_volume` | 169660.530 | 249845.224 | -80184.694 ↓未达标更高 |
-| `an_quote_change_pct` | 2.212 | 1.481 | +0.730 ↑达标更高 |
-| `an_capital_flow_ratio` | 1.163 | 0.631 | +0.532 ↑达标更高 |
-| `an_capital_main_net_in` | 837.373 | 715.048 | +122.324 ↑达标更高 |
-| `an_technical_atr` | 1.348 | 1.300 | +0.049 ↑达标更高 |
-| `an_quote_turnover_rate` | 3.748 | 3.696 | +0.051 ↑达标更高 |
-| `an_trend_detail_vol_price` | 60.667 | 54.082 | +6.584 ↑达标更高 |
-| `an_quote_amount` | 293306164.208 | 400351122.459 | -107044958.251 ↓未达标更高 |
-| `sc_days_since_gold` | 8.500 | 9.386 | -0.886 ↓未达标更高 |
-| `sc_volume` | 855488.333 | 1946578.836 | -1091090.503 ↓未达标更高 |
-| `an_capital_big_net_in` | 272.859 | 90.790 | +182.069 ↑达标更高 |
-| `an_market_pos_relative_strength` | 0.412 | -1.460 | +1.872 ↑达标更高 |
-| `sc_first_double_vol` | 1200439.576 | 2380194.978 | -1179755.402 ↓未达标更高 |
-| `sc_yin_vol` | 467611.167 | 972837.282 | -505226.116 ↓未达标更高 |
-| `an_technical_method_targets_ATR通道法` | 32.037 | 30.667 | +1.369 ↑达标更高 |
+| `an_market_pos_relative_strength` | 0.815 | -1.620 | +2.435 ↑达标更高 |
+| `an_quote_volume` | 159704.314 | 244440.938 | -84736.624 ↓未达标更高 |
+| `an_quote_turnover_rate` | 3.745 | 3.650 | +0.095 ↑达标更高 |
+| `an_quote_change_pct` | 2.132 | 1.479 | +0.653 ↑达标更高 |
+| `an_technical_atr` | 1.291 | 1.292 | -0.000 ↓未达标更高 |
+| `an_capital_super_net_in` | 434.929 | 652.650 | -217.721 ↓未达标更高 |
+| `an_capital_main_net_in` | 605.393 | 721.217 | -115.824 ↓未达标更高 |
+| `an_capital_flow_ratio` | 1.110 | 0.726 | +0.385 ↑达标更高 |
+| `an_trend_detail_vol_price` | 60.442 | 54.351 | +6.090 ↑达标更高 |
+| `sc_days_since_gold` | 8.919 | 9.360 | -0.441 ↓未达标更高 |
+| `an_capital_big_net_in` | 170.464 | 68.567 | +101.896 ↑达标更高 |
+| `sc_yin_vol` | 398411.314 | 898129.112 | -499717.798 ↓未达标更高 |
+| `sc_gold_day_vol` | 505488.174 | 1087103.456 | -581615.282 ↓未达标更高 |
+| `sc_first_double_vol` | 1027207.721 | 2252008.658 | -1224800.937 ↓未达标更高 |
+| `an_technical_method_targets_ATR通道法` | 32.320 | 31.566 | +0.754 ↑达标更高 |
 
 ## 结论摘要
-- 最关键的3个特征: `an_quote_volume` / `an_quote_change_pct` / `an_capital_flow_ratio`
-- 整体达标率: 7.1%（基准线，ML预测高于此值才有参考意义）
-- 测试集准确率 94.09%，模型有效
+- 最关键的3个特征: `an_market_pos_relative_strength` / `an_quote_volume` / `an_quote_turnover_rate`
+- 整体达标率: 7.3%（基准线，ML预测高于此值才有参考意义）
+- 测试集准确率 94.04%，模型有效
