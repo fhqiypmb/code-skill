@@ -93,6 +93,7 @@ class QuoteInfo(TypedDict):
     volume: int
     amount: int
     turnover_rate: float   # 换手率（%），f168 / 100
+    source: str            # 数据来源: 'eastmoney' / 'sina'
 
 
 class CapitalFlow(TypedDict):
@@ -792,49 +793,148 @@ def fetch_index_kline(index_code: str, days: int = 60) -> List[IndexBar]:
 
 def fetch_realtime_quote(code: str) -> QuoteInfo:
     """
-    获取个股实时行情
-    返回: {"name", "price", "change_pct", "volume", "amount", "high", "low", "open", "pre_close"}
+    获取个股实时行情。
+    优先东方财富（退避重试），失败或返回0时降级新浪备用源。
+    返回: {"name", "price", "change_pct", "volume", "amount", "high", "low", "open", "pre_close", "source"}
     """
     empty: QuoteInfo = {
         "name": "", "price": 0.0, "change_pct": 0.0,
         "high": 0.0, "low": 0.0, "open": 0.0,
         "pre_close": 0.0, "volume": 0, "amount": 0,
-        "turnover_rate": 0.0,
+        "turnover_rate": 0.0, "source": "",
     }
+
+    # ---- 东方财富（最多重试2次） ----
+    for attempt in range(3):
+        try:
+            market = 1 if code.startswith(('6', '9')) else 0
+            _eastmoney_limiter.wait()
+            url = (
+                f"https://push2.eastmoney.com/api/qt/stock/get?"
+                f"secid={market}.{code}"
+                f"&fields=f43,f44,f45,f46,f47,f48,f57,f58,f60,f168,f170"
+                f"&_={int(time.time() * 1000)}"
+            )
+            data = _http_get_json(url, headers={"Referer": "https://quote.eastmoney.com"})
+            info = data.get("data", {}) or {}
+
+            def _div(val: object, div: int = 100) -> float:
+                return val / div if val else 0.0  # type: ignore[operator]
+
+            raw_turnover = info.get("f168")
+            turnover_rate = round(float(raw_turnover) / 100, 2) if raw_turnover else 0.0  # type: ignore[arg-type]
+
+            price = _div(info.get("f43"))
+            if price > 0:
+                _eastmoney_limiter.report_success()
+                return {
+                    "name": info.get("f58", ""),
+                    "price": price,
+                    "change_pct": _div(info.get("f170")),
+                    "high": _div(info.get("f44")),
+                    "low": _div(info.get("f45")),
+                    "open": _div(info.get("f46")),
+                    "pre_close": _div(info.get("f60")),
+                    "volume": info.get("f47", 0),
+                    "amount": info.get("f48", 0),
+                    "turnover_rate": turnover_rate,
+                    "source": "eastmoney",
+                }
+
+            # price == 0，可能被限流，退避后重试
+            logger.debug(f"东方财富实时行情返回价格0 {code} (第{attempt+1}次)")
+            _eastmoney_limiter.report_throttled()
+            _record_throttle('fetch_realtime_quote_eastmoney')
+            if attempt < 2:
+                time.sleep((attempt + 1) * 1.5 + random.uniform(0.3, 1.0))
+
+        except Exception as e:
+            err_str = str(e)
+            if any(c in err_str for c in ('456', '403', '429', '503', 'RemoteDisconnected')):
+                _eastmoney_limiter.report_throttled()
+                _record_throttle('fetch_realtime_quote_eastmoney')
+            logger.debug(f"东方财富实时行情失败 {code} (第{attempt+1}次): {e}")
+            if attempt < 2:
+                time.sleep((attempt + 1) * 1.5 + random.uniform(0.3, 1.0))
+
+    # ---- 新浪备用源 ----
     try:
-        market = 1 if code.startswith(('6', '9')) else 0
-        _eastmoney_limiter.wait()
-        url = (
-            f"https://push2.eastmoney.com/api/qt/stock/get?"
-            f"secid={market}.{code}"
-            f"&fields=f43,f44,f45,f46,f47,f48,f57,f58,f60,f168,f170"
-            f"&_={int(time.time() * 1000)}"
-        )
-        data = _http_get_json(url, headers={"Referer": "https://quote.eastmoney.com"})
-        info = data.get("data", {}) or {}
-
-        def _div(val: object, div: int = 100) -> float:
-            return val / div if val else 0.0  # type: ignore[operator]
-
-        # f168 换手率，单位 ‱（万分之一），除以 100 得百分比
-        raw_turnover = info.get("f168")
-        turnover_rate = round(float(raw_turnover) / 100, 2) if raw_turnover else 0.0  # type: ignore[arg-type]
-
-        return {
-            "name": info.get("f58", ""),
-            "price": _div(info.get("f43")),
-            "change_pct": _div(info.get("f170")),
-            "high": _div(info.get("f44")),
-            "low": _div(info.get("f45")),
-            "open": _div(info.get("f46")),
-            "pre_close": _div(info.get("f60")),
-            "volume": info.get("f47", 0),
-            "amount": info.get("f48", 0),
-            "turnover_rate": turnover_rate,
-        }
+        result = _fetch_realtime_quote_sina(code)
+        if result and result.get('price', 0) > 0:
+            logger.info(f"使用新浪备用源获取实时行情: {code}")
+            return result
     except Exception as e:
-        logger.debug(f"实时行情获取失败 {code}: {e}")
-        return empty
+        logger.debug(f"新浪实时行情也失败 {code}: {e}")
+
+    logger.warning(f"所有数据源实时行情获取失败 {code}，返回空数据")
+    return empty
+
+
+def _fetch_realtime_quote_sina(code: str) -> QuoteInfo:
+    """新浪备用源：实时行情"""
+    prefix = 'sh' if code.startswith(('6', '9')) else 'sz'
+    _sina_limiter.wait()
+    url = f"https://hq.sinajs.cn/list={prefix}{code}"
+    raw = _http_get(url, headers={
+        "Referer": "https://finance.sina.com.cn",
+    }, retry=2)
+    text = raw.decode("gbk", errors="replace")
+
+    # 格式: var hq_str_sh600519="贵州茅台,开盘价,昨收,...";
+    m = re.search(r'"(.*)"', text)
+    if not m or not m.group(1):
+        return {
+            "name": "", "price": 0.0, "change_pct": 0.0,
+            "high": 0.0, "low": 0.0, "open": 0.0,
+            "pre_close": 0.0, "volume": 0, "amount": 0,
+            "turnover_rate": 0.0, "source": "",
+        }
+
+    parts = m.group(1).split(',')
+    # 新浪字段: 0=名称,1=开盘,2=昨收,3=现价,4=最高,5=最低,
+    #           6=买一价,7=卖一价,8=成交量(股),9=成交额(元),...
+    if len(parts) < 10:
+        return {
+            "name": "", "price": 0.0, "change_pct": 0.0,
+            "high": 0.0, "low": 0.0, "open": 0.0,
+            "pre_close": 0.0, "volume": 0, "amount": 0,
+            "turnover_rate": 0.0, "source": "",
+        }
+
+    try:
+        name = parts[0]
+        open_price = float(parts[1])
+        pre_close = float(parts[2])
+        price = float(parts[3])
+        high = float(parts[4])
+        low = float(parts[5])
+        volume = int(float(parts[8]))
+        amount = int(float(parts[9]))
+
+        change_pct = round((price - pre_close) / pre_close * 100, 2) if pre_close > 0 else 0.0
+
+        _sina_limiter.report_success()
+        return {
+            "name": name,
+            "price": price,
+            "change_pct": change_pct,
+            "high": high,
+            "low": low,
+            "open": open_price,
+            "pre_close": pre_close,
+            "volume": volume,
+            "amount": amount,
+            "turnover_rate": 0.0,  # 新浪不直接返回换手率
+            "source": "sina",
+        }
+    except (ValueError, IndexError) as e:
+        logger.debug(f"新浪实时行情解析失败 {code}: {e}")
+        return {
+            "name": "", "price": 0.0, "change_pct": 0.0,
+            "high": 0.0, "low": 0.0, "open": 0.0,
+            "pre_close": 0.0, "volume": 0, "amount": 0,
+            "turnover_rate": 0.0, "source": "",
+        }
 
 
 # ==================== 8. 行业指数映射 ====================
@@ -946,6 +1046,10 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
             "flow_ratio":   flow_ratio,
         }
     except Exception as e:
+        err_str = str(e)
+        if any(c in err_str for c in ('456', '403', '429', '503', 'RemoteDisconnected')):
+            _eastmoney_limiter.report_throttled()
+            _record_throttle('fetch_capital_flow')
         logger.debug(f"主力资金流向获取失败 {code}: {e}")
         return empty
 

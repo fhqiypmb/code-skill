@@ -746,9 +746,27 @@ def analyze_stock(code: str, name: str = '', signal_type: str = '') -> AnalysisR
     if not _verify_data_sync(quote, klines, capital):
         logger.warning(f"数据时间戳不同步: {code}")
 
+    # 备用源提示
+    quote_source = quote.get('source', '')
+    if quote_source == 'sina':
+        logger.warning(f"[备用源] {code} {name} 实时行情使用新浪备用源")
+
     current_price = quote.get('price', 0.0)
     if current_price <= 0 and klines:
         current_price = float(klines[-1]['close'])
+        logger.warning(f"{code} 实时价格为0，使用K线收盘价兜底: {current_price}")
+
+    # 所有数据源都失败，价格仍为0，标记失败
+    if current_price <= 0:
+        logger.error(f"{code} {name} 无法获取有效价格，跳过分析")
+        return {
+            'code': code, 'name': name, 'industry': industry, 'concepts': concepts,
+            'quote': quote, 'capital': capital,
+            'technical': {}, 'trend': {}, 'market_pos': {},
+            'success_rate': {},
+            'capital_confirmed': False, 'verdict': '数据获取失败',
+            'signal_type': signal_type,
+        }
 
     today_volume = float(quote.get('volume', 0))
 
