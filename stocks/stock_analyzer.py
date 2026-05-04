@@ -753,7 +753,18 @@ def analyze_stock(code: str, name: str = '', signal_type: str = '') -> AnalysisR
 
     current_price = quote.get('price', 0.0)
     if current_price <= 0 and klines:
-        current_price = float(klines[-1]['close'])
+        last_bar = klines[-1]
+        current_price = float(last_bar['close'])
+        quote['price'] = current_price
+        quote['source'] = quote.get('source') or 'kline_fallback'
+        if quote.get('open', 0) <= 0:
+            quote['open'] = float(last_bar['open'])
+        if quote.get('high', 0) <= 0:
+            quote['high'] = float(last_bar['high'])
+        if quote.get('low', 0) <= 0:
+            quote['low'] = float(last_bar['low'])
+        if quote.get('volume', 0) <= 0:
+            quote['volume'] = int(float(last_bar['volume']))
         logger.warning(f"{code} 实时价格为0，使用K线收盘价兜底: {current_price}")
 
     # 所有数据源都失败，价格仍为0，标记失败
