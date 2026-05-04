@@ -1058,7 +1058,7 @@ def main() -> None:
             if r.get('verdict') == '失败':
                 continue
             try:
-                ml_prob = _ml_mod.record_and_predict(
+                ml_result = _ml_mod.record_and_predict(
                     code=code, name=name,
                     period='日线', signal_type=r.get('signal_type', ''),
                     screener_details={
@@ -1068,17 +1068,24 @@ def main() -> None:
                     analysis=r,
                     save=False,  # 本地仅预测不记录
                 )
-                if ml_prob is not None:
-                    ml_results.append((code, name, ml_prob))
+                prob = ml_result.get('prob')
+                gain = ml_result.get('gain')
+                if prob is not None or gain is not None:
+                    ml_results.append((code, name, prob, gain))
             except Exception as _e:
                 print(f"  ML预测失败 {code}: {_e}")
 
         if ml_results:
             print(f"\n{'=' * 62}")
-            print(f"  ML 达标概率预测")
+            print(f"  ML 预测")
             print(f"  {'─' * 56}")
-            for code, name, prob in ml_results:
-                print(f"    {code} {name:<8}  ML达标概率: {prob}%")
+            for code, name, prob, gain in ml_results:
+                parts = []
+                if prob is not None:
+                    parts.append(f"达标概率: {prob}%")
+                if gain is not None:
+                    parts.append(f"预测涨幅: {gain:+.1f}%")
+                print(f"    {code} {name:<8}  {'  '.join(parts)}")
             print(f"{'=' * 62}")
 
 

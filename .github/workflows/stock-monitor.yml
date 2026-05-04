@@ -22,7 +22,6 @@ on:
           - loop
           - now
           - update_stock_list
-          - test_ml
       period:
         description: '选股周期 (仅now模式有效)'
         required: false
@@ -147,27 +146,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add stocks/ml/shadow_data.json stocks/ml/shadow_model.pkl stocks/ml/model_report.md || true
+          git add stocks/ml/shadow_data.json stocks/ml/shadow_model.pkl stocks/ml/shadow_regressor.pkl stocks/ml/model_report.md || true
           git diff --staged --quiet || git commit -m "ML训练更新 $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
           git pull --rebase --autostash || true
           git push || true
-
-  # ML系统测试（手动触发）
-  test-ml:
-    runs-on: ubuntu-latest
-    if: github.event.inputs.mode == 'test_ml'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Run ML test
-        run: python stocks/ml/test_ml.py
 
   # 每年12月25日提醒更新下一年休市日历
   holiday-reminder:

@@ -1455,15 +1455,22 @@ def test_single_stock(period: str, period_name: str):
             if _ml_dir not in _sys.path:
                 _sys.path.insert(0, _ml_dir)
             import shadow_learner as _ml_mod  # type: ignore[reportMissingImports]
-            ml_prob = _ml_mod.record_and_predict(
+            ml_result = _ml_mod.record_and_predict(
                 code=code, name=stock_name,
                 period=period_name, signal_type=sig_type,
                 screener_details=details, analysis=analysis,
                 save=_is_ci(),  # 本地仅预测不记录，CI环境才写入
             )
+            ml_prob = ml_result.get('prob')
+            ml_gain = ml_result.get('gain')
             print(f"\n{'=' * 60}")
-            if ml_prob is not None:
-                print(f"  ML达标概率: {ml_prob}%")
+            if ml_prob is not None or ml_gain is not None:
+                parts = []
+                if ml_prob is not None:
+                    parts.append(f"达标概率: {ml_prob}%")
+                if ml_gain is not None:
+                    parts.append(f"预测涨幅: {ml_gain:+.1f}%")
+                print(f"  ML预测  {'  '.join(parts)}")
             else:
                 print(f"  ML: 模型尚未训练（样本不足50条）")
             print(f"{'=' * 60}")
@@ -1536,14 +1543,21 @@ def main():
                     print(f"  基本面分析失败 {code}: {_e}")
             if _ml_mod and analysis:
                 try:
-                    ml_prob = _ml_mod.record_and_predict(
+                    ml_result = _ml_mod.record_and_predict(
                         code=code, name=name,
                         period=period_name, signal_type=signal_type,
                         screener_details=details, analysis=analysis,
                         save=_is_ci(),  # 本地仅预测不记录，CI环境才写入
                     )
-                    if ml_prob is not None:
-                        print(f"  ML达标概率: {ml_prob}%  [{period_name}][{signal_type}]")
+                    ml_prob = ml_result.get('prob')
+                    ml_gain = ml_result.get('gain')
+                    if ml_prob is not None or ml_gain is not None:
+                        parts = []
+                        if ml_prob is not None:
+                            parts.append(f"达标{ml_prob}%")
+                        if ml_gain is not None:
+                            parts.append(f"涨幅{ml_gain:+.1f}%")
+                        print(f"  ML预测: {'  '.join(parts)}  [{period_name}][{signal_type}]")
                     else:
                         print(f"  ML: 模型尚未训练（样本不足50条）")
                 except Exception as _e:

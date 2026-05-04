@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 _ML_DIR   = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE  = os.path.join(_ML_DIR, 'shadow_data.json')
 MODEL_FILE = os.path.join(_ML_DIR, 'shadow_model.pkl')
+REGRESSOR_FILE = os.path.join(_ML_DIR, 'shadow_regressor.pkl')
 
-# 多少天后回填实际结果
+# 多少个交易日后回填实际结果
 OUTCOME_DAYS = 5
 
 # 训练所需的最少已标记样本数
@@ -280,31 +281,48 @@ def update_outcomes() -> int:
         code         = record['code']
         entry_price  = record.get('close', 0)
         target_price = record.get('target_price', 0)
+        signal_date  = record.get('date', '')
 
         if not entry_price or not target_price:
             continue
 
         try:
-            klines = data_source.fetch_kline(code, period='240min', limit=10)
+            # 拉取信号日之后足够多的K线，筛选出信号日之后的5个交易日
+            klines = data_source.fetch_kline(code, period='240min', limit=30)
             if not klines:
                 continue
 
-            exit_price = float(klines[-1].get('close', 0))
+            # 只取信号日之后的K线（不含信号日当天）
+            after_klines = [k for k in klines if k.get('day', k.get('date', '')) > signal_date]
+            if len(after_klines) < OUTCOME_DAYS:
+                continue  # 交易日不足5天，跳过
+
+            # 取信号日之后的前5个交易日
+            window = after_klines[:OUTCOME_DAYS]
+
+            # 用窗口内最高价判断是否触达目标价
+            max_high = max(float(k.get('high', k.get('close', 0))) for k in window)
+            # exit_price 仍记录第5个交易日的收盘价（反映持有到期收益）
+            exit_price = float(window[-1].get('close', 0))
             if not exit_price:
                 continue
 
             actual_return = (exit_price - entry_price) / entry_price
-            reached       = 1 if exit_price >= target_price else 0
+            max_gain_pct  = (max_high - entry_price) / entry_price * 100
+            reached       = 1 if max_high >= target_price else 0
 
             record['reached_target'] = reached
             record['actual_return']  = round(actual_return, 4)
             record['exit_price']     = exit_price
-            record['exit_date']      = datetime.now().strftime('%Y-%m-%d')
+            record['max_high']       = max_high
+            record['max_gain_pct']   = round(max_gain_pct, 2)
+            record['exit_date']      = window[-1].get('day', window[-1].get('date', ''))
             updated += 1
 
             logger.info(
                 f"回填 {code}: 入{entry_price:.2f} 目标{target_price:.2f} "
-                f"现{exit_price:.2f} {'达标' if reached else '未达标'} ({actual_return*100:.1f}%)"
+                f"期间最高{max_high:.2f} 末日{exit_price:.2f} "
+                f"{'达标' if reached else '未达标'} ({actual_return*100:.1f}%)"
             )
             time.sleep(0.3)
 
@@ -342,7 +360,7 @@ def train() -> Optional[Any]:
     exclude = {
         'date', 'code', 'name', 'period', 'signal_type', 'timestamp',
         'gold_cross_date', 'confirm_date', 'verdict', 'industry',
-        'sr_grade', 'exit_date', 'reached_target', 'actual_return', 'exit_price',
+        'sr_grade', 'exit_date', 'reached_target', 'actual_return', 'exit_price', 'max_high', 'max_gain_pct', 'max_gain_pct',
         # 排除综合评分/加权合成字段（它们是子参数的二次加工，会干扰模型对底层因子的学习）
         'sr_score',                         # = an_success_rate_score 的冗余快照
         'an_success_rate_score',            # 6个子维度的加权求和
@@ -368,6 +386,7 @@ def train() -> Optional[Any]:
         'stop_loss',                        # 与 an_technical_stop_loss 相同
         # 排除ML预测快照字段（仅供查阅，不参与训练）
         'ml_predict_prob',                  # 当时的ML预测概率
+        'ml_predict_gain',                  # 当时的ML预测涨幅
         'ml_top3_features',                 # 当时模型的TOP3特征名
     }
     feature_fields = sorted({
@@ -419,8 +438,77 @@ def train() -> Optional[Any]:
     joblib.dump(bundle, MODEL_FILE)
     logger.info(f"模型已保存: {MODEL_FILE}")
 
-    _save_report(bundle, labeled, y, feature_fields)
+    # 同时训练回归模型（预测最大涨幅）
+    reg_bundle = _train_regressor(labeled, feature_fields)
+
+    _save_report(bundle, labeled, y, feature_fields, reg_bundle)
+
     return model
+
+
+# ==================== 回归模型：预测最大涨幅 ====================
+
+def _train_regressor(labeled: List[Dict], feature_fields: List[str]) -> Optional[Dict]:
+    """训练回归模型，预测5个交易日内的最大涨幅%"""
+    try:
+        import numpy as np
+        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import mean_absolute_error, r2_score
+        import joblib
+    except ImportError as e:
+        logger.error(f"回归模型依赖缺失: {e}")
+        return None
+
+    # 只取有 max_gain_pct 的记录
+    reg_data = [r for r in labeled if r.get('max_gain_pct') is not None]
+    if len(reg_data) < MIN_TRAIN_SAMPLES:
+        logger.warning(f"回归样本不足: {len(reg_data)} < {MIN_TRAIN_SAMPLES}，跳过")
+        return None
+
+    X = np.array([[r.get(f, 0) or 0 for f in feature_fields] for r in reg_data], dtype=float)
+    y = np.array([r['max_gain_pct'] for r in reg_data], dtype=float)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+
+    model = RandomForestRegressor(
+        n_estimators=100, max_depth=10,
+        min_samples_split=5, min_samples_leaf=2,
+        random_state=42, n_jobs=-1,
+    )
+    model.fit(X_train, y_train)
+
+    train_pred = model.predict(X_train)
+    test_pred = model.predict(X_test)
+    train_mae = mean_absolute_error(y_train, train_pred)
+    test_mae = mean_absolute_error(y_test, test_pred)
+    test_r2 = r2_score(y_test, test_pred)
+
+    logger.info(f"[回归] 训练MAE: {train_mae:.2f}%  测试MAE: {test_mae:.2f}%  R²: {test_r2:.3f}")
+    logger.info(f"[回归] 实际涨幅均值: {y.mean():.2f}%  中位数: {np.median(y):.2f}%")
+
+    importance = sorted(
+        zip(feature_fields, model.feature_importances_),
+        key=lambda x: x[1], reverse=True
+    )
+
+    bundle = {
+        'model':         model,
+        'feature_names': feature_fields,
+        'importance':    importance,
+        'train_mae':     train_mae,
+        'test_mae':      test_mae,
+        'test_r2':       test_r2,
+        'train_date':    datetime.now().strftime('%Y-%m-%d'),
+        'sample_count':  len(reg_data),
+        'mean_gain':     round(float(y.mean()), 2),
+        'median_gain':   round(float(np.median(y)), 2),
+    }
+    joblib.dump(bundle, REGRESSOR_FILE)
+    logger.info(f"回归模型已保存: {REGRESSOR_FILE}")
+    return bundle
 
 
 # ==================== 特征名中文对照表（供查阅）====================
@@ -504,7 +592,7 @@ FEATURE_NAMES_ZH = {
 }
 
 
-def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]) -> None:
+def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str], reg_bundle: Optional[Dict] = None) -> None:
     """生成模型分析报告 model_report.md"""
     report_file = os.path.join(_ML_DIR, 'model_report.md')
     train_date  = bundle['train_date']
@@ -515,12 +603,14 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
 
     lines = []
     lines.append(f"# ML模型分析报告")
-    lines.append(f"\n> **训练日期**: {train_date}（模型最近一次训练的日期，每周一自动更新）  ")
-    lines.append(f"> **样本数**: {sample_count}（已回填实际涨跌结果的历史信号数量）  ")
-    lines.append(f"> **训练集准确率**: {train_acc:.2%}  |  **测试集准确率**: {test_acc:.2%}")
+    lines.append(f"\n> **训练日期**: {train_date}（每周一自动更新）  ")
+    lines.append(f"> **共用样本数**: {sample_count}（已回填实际涨跌结果的历史信号数量）  ")
+    lines.append(f"> 本系统包含两个独立模型：**分类模型**（预测能否达标）和 **回归模型**（预测最大涨幅）")
 
-    # ── 按周期达标率 ──
-    lines.append(f"\n## 按周期达标率")
+    # ── 样本概况 ──
+    lines.append(f"\n---\n## 一、样本概况")
+
+    lines.append(f"\n### 按周期分布")
     lines.append("| 周期 | 总信号 | 达标数 | 达标率 |")
     lines.append("|------|--------|--------|--------|")
     from collections import defaultdict
@@ -534,7 +624,7 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
         lines.append(f"| {p} | {s['total']} | {s['hit']} | {rate:.1%} |")
 
     # ── 按信号类型达标率（筑底/突破/严格/普通）──
-    lines.append(f"\n## 按信号类型达标率")
+    lines.append(f"\n### 按信号类型分布")
     lines.append("信号类型说明：**筑底**=底部企稳反弹、**突破**=放量突破压力位、**严格**=金叉严格条件全满足、**普通**=金叉基本条件满足")
     lines.append("")
     lines.append("| 信号类型 | 总信号 | 达标数 | 达标率 |")
@@ -558,8 +648,13 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
             rate = s['hit'] / s['total'] if s['total'] else 0
             lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} |")
 
+    # ── 分类模型 ──
+    lines.append(f"\n---\n## 二、分类模型（预测达标概率）")
+    lines.append(f"\n任务：预测信号发出后5个交易日内，最高价能否触达目标价。")
+    lines.append(f"- **训练集准确率**: {train_acc:.2%}  |  **测试集准确率**: {test_acc:.2%}")
+
     # ── 特征重要性 TOP20（容易上涨的信号特征） ──
-    lines.append(f"\n## 特征重要性 TOP20")
+    lines.append(f"\n### 特征重要性 TOP20")
     lines.append("越靠前的特征对模型预测影响越大，可理解为「决定上涨概率的关键因子」。")
     lines.append("")
     lines.append("| 排名 | 特征名 | 重要性得分 |")
@@ -568,7 +663,7 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
         lines.append(f"| {i} | `{fname}` | {imp:.4f} |")
 
     # ── 高概率 vs 低概率信号特征均值对比 ──
-    lines.append(f"\n## 高达标 vs 低达标信号特征对比")
+    lines.append(f"\n### 高达标 vs 低达标信号特征对比")
     lines.append("对比达标(1)和未达标(0)样本的特征均值，差异大的特征是区分好坏信号的关键。")
     lines.append("")
     import numpy as np
@@ -588,8 +683,24 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
         direction = "↑达标更高" if diff > 0 else "↓未达标更高"
         lines.append(f"| `{fname}` | {hit_mean:.3f} | {miss_mean:.3f} | {diff:+.3f} {direction} |")
 
+    # ── 回归模型（预测涨幅） ──
+    if reg_bundle:
+        lines.append(f"\n---\n## 三、回归模型（预测最大涨幅）")
+        lines.append(f"\n任务：预测信号发出后5个交易日内的最大涨幅百分比。")
+        lines.append(f"- **样本数**: {reg_bundle.get('sample_count', '?')}")
+        lines.append(f"- **训练MAE**: {reg_bundle.get('train_mae', 0):.2f}%  |  **测试MAE**: {reg_bundle.get('test_mae', 0):.2f}%  |  **R²**: {reg_bundle.get('test_r2', 0):.3f}")
+        lines.append(f"- **实际涨幅均值**: {reg_bundle.get('mean_gain', 0):.2f}%  |  **中位数**: {reg_bundle.get('median_gain', 0):.2f}%")
+        lines.append(f"\n> MAE=预测值与实际值的平均绝对误差，越小越好。R²=模型解释力，越接近1越好。")
+        reg_imp = reg_bundle.get('importance', [])
+        if reg_imp:
+            lines.append(f"\n### 特征重要性 TOP10")
+            lines.append("| 排名 | 特征名 | 重要性得分 |")
+            lines.append("|------|--------|------------|")
+            for i, (fname, imp) in enumerate(reg_imp[:10], 1):
+                lines.append(f"| {i} | `{fname}` | {imp:.4f} |")
+
     # ── 结论 ──
-    lines.append(f"\n## 结论摘要")
+    lines.append(f"\n---\n## 四、结论摘要")
     top3 = [f for f, _ in importance[:3]]
     lines.append(f"- 最关键的3个特征: `{'` / `'.join(top3)}`")
     overall_rate = sum(r.get('reached_target', 0) for r in labeled) / len(labeled)
@@ -686,6 +797,27 @@ def predict(record: Dict) -> Optional[float]:
         return None
 
 
+def predict_gain(record: Dict) -> Optional[float]:
+    """
+    用回归模型预测该信号5个交易日内的最大涨幅%。
+    模型不存在或预测失败返回 None。
+    """
+    if not os.path.exists(REGRESSOR_FILE):
+        return None
+    try:
+        import joblib
+        import numpy as np
+        bundle = joblib.load(REGRESSOR_FILE)
+        model         = bundle['model']
+        feature_names = bundle['feature_names']
+        X = np.array([[record.get(f, 0) or 0 for f in feature_names]], dtype=float)
+        gain = model.predict(X)[0]
+        return round(float(gain), 1)
+    except Exception as e:
+        logger.warning(f"ML涨幅预测失败: {e}")
+        return None
+
+
 def _get_model_top3() -> List[str]:
     """获取当前模型的 TOP3 重要特征名，模型不存在返回空列表"""
     if not os.path.exists(MODEL_FILE):
@@ -707,10 +839,11 @@ def record_and_predict(
     screener_details: Dict,
     analysis: Dict,
     save: bool = True,
-) -> Optional[float]:
+) -> Dict:
     """
-    记录信号 + 立即预测达标概率，一步完成。
-    返回概率(0-100)，模型不存在或失败返回 None。
+    记录信号 + 立即预测达标概率和预测涨幅，一步完成。
+    返回 {'prob': 达标概率(0-100), 'gain': 预测涨幅%}，
+    模型不存在或失败时对应值为 None。
 
     参数:
         save: 是否将信号写入 shadow_data.json。
@@ -727,7 +860,6 @@ def record_and_predict(
                     analysis=analysis,
                 )
             else:
-                # 仅构造临时特征字典用于预测，不写文件
                 record = _build_predict_features(
                     code=code, name=name,
                     period=period, signal_type=signal_type,
@@ -735,12 +867,13 @@ def record_and_predict(
                     analysis=analysis,
                 )
             prob = predict(record) if record else None
+            gain = predict_gain(record) if record else None
 
-            # 将ML预测结果和TOP3特征回写到记录中（仅供查阅，不参与训练）
+            # 将ML预测结果回写到记录中（仅供查阅，不参与训练）
             if save and record and isinstance(record, dict):
                 record['ml_predict_prob'] = prob
+                record['ml_predict_gain'] = gain
                 record['ml_top3_features'] = _get_model_top3()
-                # 回写到文件
                 data = _load_data()
                 for r in reversed(data):
                     if (r.get('date') == record.get('date') and
@@ -748,18 +881,19 @@ def record_and_predict(
                         r.get('period') == record.get('period') and
                         r.get('signal_type') == record.get('signal_type')):
                         r['ml_predict_prob'] = prob
+                        r['ml_predict_gain'] = gain
                         r['ml_top3_features'] = record['ml_top3_features']
                         break
                 _save_data(data)
 
-            return prob
+            return {'prob': prob, 'gain': gain}
         except Exception as e:
             import traceback
             logger.error(f"ML记录/预测失败 {code} (第{attempt}次): {e}\n{traceback.format_exc()}")
             if attempt < 3:
                 import time
                 time.sleep(1)
-    return None
+    return {'prob': None, 'gain': None}
 
 
 # ==================== 统计 ====================

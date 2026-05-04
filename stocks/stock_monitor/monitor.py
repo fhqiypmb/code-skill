@@ -67,9 +67,9 @@ except Exception as _ml_import_err:
 
 
 def _ml_record_signal(code, name, period, signal_type, details, analysis):
-    """将信号写入ML数据集并返回达标概率，失败自动重试最多3次"""
+    """将信号写入ML数据集并返回预测结果，失败自动重试最多3次"""
     if not _ML_AVAILABLE:
-        return None
+        return {'prob': None, 'gain': None}
     for attempt in range(1, 4):
         try:
             return _shadow_learner.record_and_predict(
@@ -85,7 +85,7 @@ def _ml_record_signal(code, name, period, signal_type, details, analysis):
             )
             if attempt < 3:
                 time.sleep(1)
-    return None
+    return {'prob': None, 'gain': None}
 
 def _get_probability_color(probability: float) -> str:
     """根据概率返回 HTML 颜色代码"""
@@ -526,7 +526,9 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         sr_score = sr.get('score', 0.0)
 
         # ML自动记录 + 预测（复用已有analysis，不重复请求）
-        ml_prob = _ml_record_signal(code, name, period_name, signal_type, details, analysis)
+        ml_result = _ml_record_signal(code, name, period_name, signal_type, details, analysis)
+        ml_prob = ml_result.get('prob')
+        ml_gain = ml_result.get('gain')
 
         # 非普通信号：立即单推
         if not is_normal:
@@ -543,8 +545,13 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             analysis_text = _format_analysis_for_dingtalk(analysis, details=details)
             if analysis_text:
                 content += "\n\n" + analysis_text
-            if ml_prob is not None:
-                content += f"\n\n🤖 **ML预测** {ml_prob}%"
+            if ml_prob is not None or ml_gain is not None:
+                ml_parts = []
+                if ml_prob is not None:
+                    ml_parts.append(f"达标{ml_prob}%")
+                if ml_gain is not None:
+                    ml_parts.append(f"预测涨幅{ml_gain:+.1f}%")
+                content += f"\n\n🤖 **ML预测** {'  '.join(ml_parts)}"
             send_dingtalk(webhook, secret, title, content)
             pushed_count[0] += 1
 
@@ -558,6 +565,7 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             'verdict':     verdict,
             'analysis':    analysis,
             'ml_prob':     ml_prob,
+            'ml_gain':     ml_gain,
         }
 
         pushed_signals.append(sig_entry)
@@ -650,8 +658,11 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
                 rs = mp.get('relative_strength', 0)
                 row2_parts.append(f"RS{rs:+.1f}%")
             ml_prob = s.get('ml_prob')
+            ml_gain = s.get('ml_gain')
             if ml_prob is not None:
-                row2_parts.append(f"🤖ML预测{ml_prob}%")
+                row2_parts.append(f"🤖达标{ml_prob}%")
+            if ml_gain is not None:
+                row2_parts.append(f"📈涨幅{ml_gain:+.1f}%")
             if row2_parts:
                 lines.append("  ↳ " + "  ".join(row2_parts))
 
