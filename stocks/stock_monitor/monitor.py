@@ -161,11 +161,43 @@ DEDUP_HOURS = 2
 SIGNALS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signals')
 
 
+# ==================== 交易日历 ====================
+_HOLIDAYS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'holidays.json')
+_holidays_cache = None
+
+
+def _load_holidays() -> set:
+    """加载A股非周末休市日（法定假日），缓存避免重复读文件"""
+    global _holidays_cache
+    if _holidays_cache is not None:
+        return _holidays_cache
+    _holidays_cache = set()
+    try:
+        with open(_HOLIDAYS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        for year_key, dates in data.items():
+            if isinstance(dates, list):
+                _holidays_cache.update(dates)
+        logger.info(f"加载休市日历: {len(_holidays_cache)} 个假日")
+    except Exception as e:
+        logger.warning(f"休市日历加载失败（将仅按周末判断）: {e}")
+    return _holidays_cache
+
+
+def is_trading_day() -> bool:
+    """判断今天是否为A股交易日（排除周末 + 法定假日）"""
+    now = get_beijing_now()
+    if now.weekday() >= 5:
+        return False
+    today_str = now.strftime('%Y-%m-%d')
+    return today_str not in _load_holidays()
+
+
 # ==================== 交易时间判断 ====================
 def is_trading_time() -> bool:
     """判断当前是否在交易时间内（北京时间）"""
     now = get_beijing_now()
-    if now.weekday() >= 5:
+    if not is_trading_day():
         return False
     t = now.strftime('%H:%M')
     morning = TRADING_START_MORNING <= t <= TRADING_END_MORNING
@@ -175,16 +207,18 @@ def is_trading_time() -> bool:
 
 def is_before_trading() -> bool:
     """判断是否在当天开盘前"""
-    now = get_beijing_now()
-    if now.weekday() >= 5:
+    if not is_trading_day():
         return False
+    now = get_beijing_now()
     return now.strftime('%H:%M') < TRADING_START_MORNING
 
 
 def is_after_trading() -> bool:
     """判断是否在当天收盘后"""
+    if not is_trading_day():
+        return True
     now = get_beijing_now()
-    return now.strftime('%H:%M') > TRADING_END_AFTERNOON or now.weekday() >= 5
+    return now.strftime('%H:%M') > TRADING_END_AFTERNOON
 
 
 def is_lunch_break() -> bool:
@@ -431,6 +465,7 @@ def _format_single_signal(period_name: str, code: str, name: str,
     icon      = _SIGNAL_TYPE_ICONS.get(signal_type, '⚪')
     round_tag = f" · 第{round_num}轮" if round_num else ""
     close     = details.get('close', 0)
+    time_str  = get_beijing_now().strftime('%m-%d %H:%M:%S')
 
     if verdict == '达标':
         verdict_html = f'<font color="#00AA00">**✅ {verdict}**</font>'
@@ -442,6 +477,7 @@ def _format_single_signal(period_name: str, code: str, name: str,
     lines = [
         f"### {icon} {signal_type}买入 · {period_name}{round_tag}",
         f"**{code} {name}  ¥{close:.2f}**  {verdict_html}",
+        f"⏰ {time_str}",
     ]
     return "\n\n".join(lines)
 
@@ -508,7 +544,7 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             if analysis_text:
                 content += "\n\n" + analysis_text
             if ml_prob is not None:
-                content += f"\n\n🤖 **ML达标概率** {ml_prob}%"
+                content += f"\n\n🤖 **ML预测** {ml_prob}%"
             send_dingtalk(webhook, secret, title, content)
             pushed_count[0] += 1
 
@@ -556,7 +592,7 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
 # ==================== 一轮完整扫描 ====================
 def _format_round_summary(all_signals: list, round_num: int) -> str:
     """格式化一轮扫描的汇总消息（精简版，无普通信号）"""
-    beijing_now = get_beijing_now().strftime('%H:%M')
+    beijing_now = get_beijing_now().strftime('%m-%d %H:%M:%S')
     lines = [f"### 📋 第{round_num}轮汇总 ({beijing_now})"]
 
     if not all_signals:
@@ -615,7 +651,7 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
                 row2_parts.append(f"RS{rs:+.1f}%")
             ml_prob = s.get('ml_prob')
             if ml_prob is not None:
-                row2_parts.append(f"🤖{ml_prob}%")
+                row2_parts.append(f"🤖ML预测{ml_prob}%")
             if row2_parts:
                 lines.append("  ↳ " + "  ".join(row2_parts))
 
@@ -692,6 +728,11 @@ def main():
     logger.info(f"  钉钉推送: {'已配置' if webhook and secret else '未配置'}")
     logger.info(f"  北京时间: {get_beijing_now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
+
+    # 非交易日直接退出（节假日/周末），--now 模式不受限制
+    if not args.now and not is_trading_day():
+        logger.info(f"今天非A股交易日（休市），跳过监控")
+        return
 
     # --now 模式：立即跑一次就退出
     if args.now:

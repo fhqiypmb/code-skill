@@ -9,6 +9,7 @@ on:
     - cron: '30 1 * * 1-5'    # 监控：工作日 09:30 北京时间（提前排队，monitor.py 内部会等到09:25开盘）
     - cron: '0 23 * * 0'      # 更新列表：周一 07:00 北京时间（周日UTC23点=周一北京07点）
     - cron: '30 0 * * 1-5'    # 更新列表：工作日 08:30 北京时间
+    - cron: '0 2 25 12 *'     # 提醒更新休市日历：每年12月25日 10:00 北京时间
 
   workflow_dispatch:
     inputs:
@@ -167,3 +168,36 @@ jobs:
 
       - name: Run ML test
         run: python stocks/ml/test_ml.py
+
+  # 每年12月25日提醒更新下一年休市日历
+  holiday-reminder:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 2 25 12 *'
+
+    steps:
+      - name: Send reminder
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+        run: |
+          python3 -c "
+          import json, time, hmac, hashlib, base64, urllib.request, urllib.parse
+          webhook = '${{ secrets.DINGTALK_WEBHOOK }}'
+          secret = '${{ secrets.DINGTALK_SECRET }}'
+          timestamp = str(round(time.time() * 1000))
+          sign_str = f'{timestamp}\n{secret}'
+          hmac_code = hmac.new(secret.encode(), sign_str.encode(), digestmod=hashlib.sha256).digest()
+          sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+          url = f'{webhook}&timestamp={timestamp}&sign={sign}'
+          msg = {
+              'msgtype': 'markdown',
+              'markdown': {
+                  'title': '📅 休市日历更新提醒',
+                  'text': '## 📅 休市日历更新提醒\n\n请尽快更新明年的A股休市日历：\n\n**文件**: stocks/stock_monitor/holidays.json\n\n证监会通常在12月底公布下一年休市安排，请搜索后让AI助手更新。\n\n> 未更新的话，明年假期会误触发监控推送重复数据。'
+              }
+          }
+          data = json.dumps(msg).encode()
+          req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+          with urllib.request.urlopen(req, timeout=15) as r:
+              print(json.loads(r.read().decode()))
+          "
