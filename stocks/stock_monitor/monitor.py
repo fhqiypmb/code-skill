@@ -731,7 +731,17 @@ def main():
 
     # 非交易日直接退出（节假日/周末），--now 模式不受限制
     if not args.now and not is_trading_day():
-        logger.info(f"今天非A股交易日（休市），跳过监控")
+        now = get_beijing_now()
+        today_str = now.strftime('%Y-%m-%d')
+        if now.weekday() >= 5:
+            reason = "周末休市"
+        else:
+            reason = "节假日休市"
+        logger.info(f"今天{reason}，跳过监控")
+        if webhook and secret:
+            send_dingtalk(webhook, secret,
+                f"📅 {today_str} {reason}",
+                f"## 📅 今日{reason}\n\n**{today_str}** 非A股交易日，监控已跳过。")
         return
 
     # --now 模式：立即跑一次就退出
