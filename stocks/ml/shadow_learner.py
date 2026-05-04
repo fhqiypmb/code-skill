@@ -366,6 +366,9 @@ def train() -> Optional[Any]:
         'an_quote_price',                   # 与 sc_close 相同
         'an_technical_current_price',       # 与 sc_close 相同
         'stop_loss',                        # 与 an_technical_stop_loss 相同
+        # 排除ML预测快照字段（仅供查阅，不参与训练）
+        'ml_predict_prob',                  # 当时的ML预测概率
+        'ml_top3_features',                 # 当时模型的TOP3特征名
     }
     feature_fields = sorted({
         k for r in labeled for k, v in r.items()
@@ -683,6 +686,19 @@ def predict(record: Dict) -> Optional[float]:
         return None
 
 
+def _get_model_top3() -> List[str]:
+    """获取当前模型的 TOP3 重要特征名，模型不存在返回空列表"""
+    if not os.path.exists(MODEL_FILE):
+        return []
+    try:
+        import joblib
+        bundle = joblib.load(MODEL_FILE)
+        importance = bundle.get('importance', [])
+        return [name for name, _ in importance[:3]]
+    except Exception:
+        return []
+
+
 def record_and_predict(
     code: str,
     name: str,
@@ -718,7 +734,25 @@ def record_and_predict(
                     screener_details=screener_details,
                     analysis=analysis,
                 )
-            return predict(record) if record else None
+            prob = predict(record) if record else None
+
+            # 将ML预测结果和TOP3特征回写到记录中（仅供查阅，不参与训练）
+            if save and record and isinstance(record, dict):
+                record['ml_predict_prob'] = prob
+                record['ml_top3_features'] = _get_model_top3()
+                # 回写到文件
+                data = _load_data()
+                for r in reversed(data):
+                    if (r.get('date') == record.get('date') and
+                        r.get('code') == record.get('code') and
+                        r.get('period') == record.get('period') and
+                        r.get('signal_type') == record.get('signal_type')):
+                        r['ml_predict_prob'] = prob
+                        r['ml_top3_features'] = record['ml_top3_features']
+                        break
+                _save_data(data)
+
+            return prob
         except Exception as e:
             import traceback
             logger.error(f"ML记录/预测失败 {code} (第{attempt}次): {e}\n{traceback.format_exc()}")
