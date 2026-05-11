@@ -112,7 +112,7 @@ def _get_last_week_trading_days(today: datetime = None, weeks: int = 1) -> List[
             trading_days.append(ds)
             d += timedelta(days=1)
 
-    trading_days.sort()
+    trading_days.sort(reverse=True)
     return trading_days
 
 
@@ -160,7 +160,11 @@ def _filter_records(
             if isinstance(r.get("ml_predict_prob"), (int, float))
             and r["ml_predict_prob"] >= threshold
         ]
-        items.sort(key=lambda x: x["ml_predict_prob"], reverse=True)
+        items.sort(key=lambda x: (
+            -x.get("ml_predict_prob", 0),
+            -_get_capital_net_value(x),
+            -float(x.get("an_success_rate_dim_momentum") or 0),
+        ))
         if items:
             result[d] = items
     return result, no_ml_data_dates
@@ -177,16 +181,16 @@ def _get_signal_price(r: Dict) -> str:
 
 
 def _get_capital_flow(r: Dict) -> str:
-    """资金净流入金额 + 流入/流出标记（简短版，用于表格）"""
+    """资金净流入金额 + 占比 + 流入/流出标记（简短版，用于表格）"""
     net_in = r.get("an_capital_main_net_in")
     if net_in is None or net_in == "":
         return "-"
 
     net_in = float(net_in)
     if net_in > 0:
-        icon = E_GREEN
-    elif net_in < 0:
         icon = E_RED
+    elif net_in < 0:
+        icon = E_GREEN
     else:
         icon = E_WHITE
 
@@ -196,7 +200,14 @@ def _get_capital_flow(r: Dict) -> str:
         amount_str = f"{abs(net_in):.0f}万"
 
     sign = "+" if net_in > 0 else ("-" if net_in < 0 else "")
-    return f"{icon}{sign}{amount_str}"
+
+    # 资金占比
+    ratio = r.get("an_capital_flow_ratio")
+    ratio_str = ""
+    if ratio is not None and ratio != "":
+        ratio_str = f"({float(ratio):.2f})"
+
+    return f"{icon}{sign}{amount_str}{ratio_str}"
 
 
 def _get_capital_net_value(r: Dict) -> float:
@@ -216,7 +227,7 @@ def _get_momentum(r: Dict) -> str:
     if val >= 80:
         return f"{E_FIRE} **{val:.1f}**"
     elif val >= 60:
-        return f"{E_GREEN} {val:.1f}"
+        return f"{E_RED} {val:.1f}"
     elif val >= 40:
         return f"{E_YELLOW} {val:.1f}"
     else:
@@ -224,11 +235,37 @@ def _get_momentum(r: Dict) -> str:
 
 
 def _get_high(r: Dict) -> str:
-    """回填期间最高价（信号发出后5日内最高价），未回填则显示 -"""
+    """回填期间最高价（信号发出后5日内最高价），未回填则显示 -
+    如果有回填最高价和信号价格，则附带上涨百分比"""
     val = r.get("max_high")
     if val is not None and val != "":
-        return f"{float(val):.2f}"
+        max_h = float(val)
+        price_val = r.get("sc_close") or r.get("close") or ""
+        if price_val != "":
+            entry = float(price_val)
+            if entry > 0:
+                pct = (max_h - entry) / entry * 100
+                sign = "+" if pct >= 0 else ""
+                return f"{max_h:.2f}({sign}{pct:.1f}%)"
+        return f"{max_h:.2f}"
     return "-"
+
+
+def _get_predict_gain(r: Dict) -> str:
+    """ML预测上涨百分比"""
+    val = r.get("ml_predict_gain")
+    if val is None or val == "":
+        return "-"
+    val = float(val)
+    sign = "+" if val >= 0 else ""
+    if val >= 10:
+        return f"{E_FIRE} **{sign}{val:.1f}%**"
+    elif val >= 5:
+        return f"{E_RED} {sign}{val:.1f}%"
+    elif val >= 0:
+        return f"{E_YELLOW} {sign}{val:.1f}%"
+    else:
+        return f"{E_GREEN} {val:.1f}%"
 
 
 def _get_prob_str(prob: float) -> str:
@@ -236,7 +273,7 @@ def _get_prob_str(prob: float) -> str:
     if prob >= 90:
         return f"{E_FIRE} **{prob:.1f}%**"
     elif prob >= 80:
-        return f"{E_GREEN} **{prob:.1f}%**"
+        return f"{E_RED} **{prob:.1f}%**"
     elif prob >= 70:
         return f"{E_YELLOW} {prob:.1f}%"
     else:
@@ -256,8 +293,8 @@ def _weekday_cn(date_str: str) -> str:
 def _render_table(records: List[Dict]) -> str:
     """渲染单日详情表格"""
     lines = []
-    lines.append("| # | 代码 | 名称 | 信号类型 | 周期 | 信号价格 | 资金净流入 | 动能 | 回填最高价 | ML预测概率 |")
-    lines.append("|:---:|:----:|:----:|:-------:|:---:|:-------:|:---------:|:---:|:---------:|:---------:|")
+    lines.append("| # | 代码 | 名称 | 信号类型 | 周期 | 信号价格 | 资金净流入 | 动能 | 回填最高价 | ML预测概率 | ML预测涨幅 |")
+    lines.append("|:---:|:----:|:----:|:-------:|:---:|:-------:|:---------:|:---:|:---------:|:---------:|:---------:|")
     for i, r in enumerate(records, 1):
         code = r.get("code", "")
         name = r.get("name", "")
@@ -269,9 +306,10 @@ def _render_table(records: List[Dict]) -> str:
         high = _get_high(r)
         prob = r.get("ml_predict_prob", 0)
         prob_str = _get_prob_str(prob)
+        gain_str = _get_predict_gain(r)
         lines.append(
             f"| {i} | {code} | {name} | {signal_type} | {period} "
-            f"| {signal_price} | {capital_flow} | {momentum} | {high} | {prob_str} |"
+            f"| {signal_price} | {capital_flow} | {momentum} | {high} | {prob_str} | {gain_str} |"
         )
     return "\n".join(lines)
 
@@ -369,7 +407,7 @@ def generate_report(
     lines.append("| 标记 | 含义 |")
     lines.append("|:----:|:----:|")
     lines.append(f"| {E_FIRE} | >= 90% |")
-    lines.append(f"| {E_GREEN} | >= 80% |")
+    lines.append(f"| {E_RED} | >= 80% |")
     lines.append(f"| {E_YELLOW} | >= 70% |")
     lines.append(f"| {E_WHITE} | < 70% |")
     lines.append("")
@@ -377,8 +415,8 @@ def generate_report(
     lines.append("")
     lines.append("| 标记 | 含义 |")
     lines.append("|:----:|:----:|")
-    lines.append(f"| {E_GREEN} | 主力净流入 |")
-    lines.append(f"| {E_RED} | 主力净流出 |")
+    lines.append(f"| {E_RED} | 主力净流入 |")
+    lines.append(f"| {E_GREEN} | 主力净流出 |")
     lines.append(f"| {E_WHITE} | 持平 |")
     lines.append("")
     lines.append("**动能**")
@@ -386,9 +424,18 @@ def generate_report(
     lines.append("| 标记 | 含义 |")
     lines.append("|:----:|:----:|")
     lines.append(f"| {E_FIRE} | >= 80 |")
-    lines.append(f"| {E_GREEN} | >= 60 |")
+    lines.append(f"| {E_RED} | >= 60 |")
     lines.append(f"| {E_YELLOW} | >= 40 |")
     lines.append(f"| {E_WHITE} | < 40 |")
+    lines.append("")
+    lines.append("**ML预测涨幅**")
+    lines.append("")
+    lines.append("| 标记 | 含义 |")
+    lines.append("|:----:|:----:|")
+    lines.append(f"| {E_FIRE} | >= 10% |")
+    lines.append(f"| {E_RED} | >= 5% |")
+    lines.append(f"| {E_YELLOW} | >= 0% |")
+    lines.append(f"| {E_GREEN} | < 0% |")
     lines.append("")
     lines.append("</details>")
     lines.append("")
