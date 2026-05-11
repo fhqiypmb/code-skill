@@ -7,7 +7,7 @@
 输出字段：股票名称、股票代码、信号类型、周期、信号价格、资金净流入(流入/流出)、动能、最高价、ML预测概率
 
 用法:
-    python weekly_ml_report.py                  # 默认阈值 60，覆盖已有报告
+    python weekly_ml_report.py                  # 默认阈值 60，覆盖已有报告，默认近1周
     python weekly_ml_report.py --threshold 70   # 自定义阈值
     python weekly_ml_report.py --mode new       # 删除旧报告再写新报告（默认覆盖）
 """
@@ -80,10 +80,10 @@ def _load_holidays() -> Set[str]:
     return holidays
 
 
-def _get_last_week_trading_days(today: datetime = None) -> List[str]:
+def _get_last_week_trading_days(today: datetime = None, weeks: int = 1) -> List[str]:
     """
-    根据今天日期，返回「上一周」的交易日列表。
-    "上一周"始终指上个自然周（周一~周日）中的交易日。
+    根据今天日期，返回「近 N 周」的交易日列表。
+    weeks=1 时只取上周；weeks=3 时取上周+上上周+上上上周。
     自动排除周末和 holidays.json 中的法定假日。
     返回格式: ['2026-05-06', '2026-05-07', ...]  按日期升序
     """
@@ -93,23 +93,26 @@ def _get_last_week_trading_days(today: datetime = None) -> List[str]:
     holidays = _load_holidays()
 
     this_monday = today - timedelta(days=today.weekday())
-    last_monday = this_monday - timedelta(days=7)
-    last_sunday = this_monday - timedelta(days=1)
 
     trading_days = []
-    d = last_monday
-    while d <= last_sunday:
-        ds = d.strftime("%Y-%m-%d")
-        weekday = d.weekday()
-        if weekday >= 5:
-            d += timedelta(days=1)
-            continue
-        if ds in holidays:
-            d += timedelta(days=1)
-            continue
-        trading_days.append(ds)
-        d += timedelta(days=1)
+    for w in range(weeks):
+        week_monday = this_monday - timedelta(days=7 * (w + 1))
+        week_sunday = this_monday - timedelta(days=7 * w + 1)
 
+        d = week_monday
+        while d <= week_sunday:
+            ds = d.strftime("%Y-%m-%d")
+            weekday = d.weekday()
+            if weekday >= 5:
+                d += timedelta(days=1)
+                continue
+            if ds in holidays:
+                d += timedelta(days=1)
+                continue
+            trading_days.append(ds)
+            d += timedelta(days=1)
+
+    trading_days.sort()
     return trading_days
 
 
@@ -127,20 +130,40 @@ def _filter_records(
     data: List[Dict],
     trading_days: List[str],
     threshold: float,
-) -> Dict[str, List[Dict]]:
-    """按日期分组，筛选 ml_predict_prob >= threshold 的记录，按 prob 降序"""
+) -> tuple:
+    """按日期分组，筛选 ml_predict_prob >= threshold 的记录，按 prob 降序
+
+    返回: (filtered, no_ml_data_dates)
+        filtered: Dict[str, List[Dict]]  日期 -> 符合条件的记录
+        no_ml_data_dates: Set[str]  完全没有 ml_predict_prob 数据的日期集合
+    """
     result = {}
+    no_ml_data_dates = set()
+
     for d in trading_days:
+        day_records = [r for r in data if r.get("date") == d]
+        has_prob = any(
+            isinstance(r.get("ml_predict_prob"), (int, float))
+            for r in day_records
+        )
+        if not has_prob and day_records:
+            # 该日有数据但无 ml_predict_prob
+            no_ml_data_dates.add(d)
+            continue
+        if not day_records:
+            # 该日无任何数据（可能尚未采集）
+            no_ml_data_dates.add(d)
+            continue
+
         items = [
-            r for r in data
-            if r.get("date") == d
-            and isinstance(r.get("ml_predict_prob"), (int, float))
+            r for r in day_records
+            if isinstance(r.get("ml_predict_prob"), (int, float))
             and r["ml_predict_prob"] >= threshold
         ]
         items.sort(key=lambda x: x["ml_predict_prob"], reverse=True)
         if items:
             result[d] = items
-    return result
+    return result, no_ml_data_dates
 
 
 # ─────────────────── 字段提取辅助 ───────────────────
@@ -201,9 +224,9 @@ def _get_momentum(r: Dict) -> str:
 
 
 def _get_high(r: Dict) -> str:
-    """最高价：优先 an_quote_high，其次 max_high"""
-    val = r.get("an_quote_high") or r.get("max_high") or ""
-    if val != "":
+    """回填期间最高价（信号发出后5日内最高价），未回填则显示 -"""
+    val = r.get("max_high")
+    if val is not None and val != "":
         return f"{float(val):.2f}"
     return "-"
 
@@ -233,8 +256,8 @@ def _weekday_cn(date_str: str) -> str:
 def _render_table(records: List[Dict]) -> str:
     """渲染单日详情表格"""
     lines = []
-    lines.append("| # | 代码 | 名称 | 信号类型 | 周期 | 信号价格 | 资金净流入 | 动能 | 最高价 | ML预测概率 |")
-    lines.append("|:---:|:----:|:----:|:-------:|:---:|:-------:|:---------:|:---:|:-----:|:---------:|")
+    lines.append("| # | 代码 | 名称 | 信号类型 | 周期 | 信号价格 | 资金净流入 | 动能 | 回填最高价 | ML预测概率 |")
+    lines.append("|:---:|:----:|:----:|:-------:|:---:|:-------:|:---------:|:---:|:---------:|:---------:|")
     for i, r in enumerate(records, 1):
         code = r.get("code", "")
         name = r.get("name", "")
@@ -257,10 +280,16 @@ def generate_report(
     filtered: Dict[str, List[Dict]],
     trading_days: List[str],
     threshold: float,
+    weeks: int = 1,
+    no_ml_data_dates: Set[str] = None,
 ) -> str:
     """生成完整 Markdown 报告"""
+    if no_ml_data_dates is None:
+        no_ml_data_dates = set()
     today = datetime.now()
     total = sum(len(v) for v in filtered.values())
+
+    weeks_label = f"近 {weeks} 周" if weeks > 1 else "上周"
 
     lines = []
 
@@ -268,7 +297,7 @@ def generate_report(
     lines.append(f"# {E_CHART} ML 预测概率周报")
     lines.append("")
     lines.append(f"> {E_CALENDAR} 生成时间：{today.strftime('%Y-%m-%d %H:%M:%S')}")
-    lines.append(f"> {E_CALENDAR} 报告周期：{trading_days[0]} ~ {trading_days[-1]}")
+    lines.append(f"> {E_CALENDAR} 报告周期：{weeks_label}（{trading_days[0]} ~ {trading_days[-1]}）")
     lines.append(f"> {E_TARGET} 筛选阈值：`ml_predict_prob >= {threshold}%`")
     lines.append(f"> {E_UP} 符合条件：**{total}** 只股票")
     lines.append("")
@@ -278,19 +307,24 @@ def generate_report(
     if not filtered:
         lines.append(f"## {E_EMPTY} 无符合条件的数据")
         lines.append("")
-        lines.append(f"上一周交易日中没有 `ml_predict_prob >= {threshold}%` 的记录。")
+        lines.append(f"{weeks_label}交易日中没有 `ml_predict_prob >= {threshold}%` 的记录。")
         lines.append("")
         return "\n".join(lines)
 
     # ── 每日概览 ──
     lines.append(f"## {E_CLIPBOARD} 每日概览")
     lines.append("")
-    lines.append("| 日期 | 数量 | 最高概率股 | 资金净流入最优 | 动能最强 |")
-    lines.append("|:----:|:----:|:---------:|:-------------:|:-------:|")
-    for d in trading_days:
-        count = len(filtered.get(d, []))
-        if count > 0:
+
+    # 只显示有符合条件数据的日期
+    active_days = [d for d in trading_days if d in filtered]
+    skipped_zero_days = [d for d in trading_days if d not in filtered and d not in no_ml_data_dates]
+
+    if active_days:
+        lines.append("| 日期 | 数量 | 最高概率股 | 资金净流入最优 | 动能最强 |")
+        lines.append("|:----:|:----:|:---------:|:-------------:|:-------:|")
+        for d in active_days:
             recs = filtered[d]
+            count = len(recs)
             top_prob = recs[0]
             top_prob_info = f"{top_prob['name']}({top_prob['ml_predict_prob']:.1f}%)"
             top_capital = max(recs, key=_get_capital_net_value)
@@ -305,9 +339,20 @@ def generate_report(
             mom_val = float(top_mom.get("an_success_rate_dim_momentum") or 0)
             mom_info = f"{top_mom['name']}({mom_val:.1f})"
             lines.append(f"| 周{_weekday_cn(d)} {d[5:]} | {count} 只 | {top_prob_info} | {cap_info} | {mom_info} |")
-        else:
-            lines.append(f"| 周{_weekday_cn(d)} {d[5:]} | 0 只 | - | - | - |")
+    else:
+        lines.append(f"{E_EMPTY} 所选周期内无符合条件的数据")
     lines.append("")
+
+    # 注释：无 ML 数据的日期 & 有 ML 数据但 0 条符合条件的日期
+    if no_ml_data_dates:
+        no_ml_str = ", ".join(f"周{_weekday_cn(d)} {d[5:]}" for d in sorted(no_ml_data_dates))
+        lines.append(f"> {E_YELLOW} 以下日期无 ML 预测数据：{no_ml_str}")
+    if skipped_zero_days:
+        skip_str = ", ".join(f"周{_weekday_cn(d)} {d[5:]}" for d in sorted(skipped_zero_days))
+        lines.append(f"> {E_WHITE} 以下日期有 ML 数据但无符合 `>={threshold}%` 条件的股票：{skip_str}")
+    if no_ml_data_dates or skipped_zero_days:
+        lines.append("")
+
     lines.append("---")
     lines.append("")
 
@@ -478,9 +523,26 @@ def main():
     parser = argparse.ArgumentParser(description="ML预测概率周报生成器")
     parser.add_argument("--threshold", "-t", type=float, default=None,
                         help="ml_predict_prob 筛选阈值（默认交互输入，回车默认60）")
+
     parser.add_argument("--mode", "-m", choices=["overwrite", "new"], default=None,
                         help="写入模式：overwrite=覆盖（默认）, new=删除旧文件再写")
     args = parser.parse_args()
+
+    # ── 周数输入 ──
+    raw = _safe_input("[?] 统计近几周数据？（直接回车默认 1，即上周）: ").strip()
+    if raw == "":
+        weeks = 1
+    else:
+        try:
+            weeks = int(raw)
+            if weeks < 1:
+                _safe_print("[!] 周数不能小于1，使用默认值 1")
+                weeks = 1
+        except ValueError:
+            _safe_print("[!] 输入无效，使用默认值 1")
+            weeks = 1
+    weeks_label = f"近 {weeks} 周" if weeks > 1 else "上周"
+    _safe_print(f"[*] 统计范围: {weeks_label}")
 
     # ── 阈值输入 ──
     if args.threshold is not None:
@@ -508,12 +570,12 @@ def main():
         else:
             write_mode = "overwrite"
 
-    # ── 计算上周交易日 ──
-    trading_days = _get_last_week_trading_days()
+    # ── 计算近N周交易日 ──
+    trading_days = _get_last_week_trading_days(weeks=weeks)
     if not trading_days:
         _safe_print("[!] 无法确定上周交易日")
         sys.exit(1)
-    _safe_print(f"[*] 上周交易日: {', '.join(trading_days)}")
+    _safe_print(f"[*] {weeks_label}交易日: {', '.join(trading_days)}")
 
     # ── 加载数据 ──
     data = _load_data()
@@ -523,16 +585,18 @@ def main():
     _safe_print(f"[*] 含 ml_predict_prob: {has_prob} 条")
 
     # ── 筛选 ──
-    filtered = _filter_records(data, trading_days, threshold)
+    filtered, no_ml_data_dates = _filter_records(data, trading_days, threshold)
     total = sum(len(v) for v in filtered.values())
     _safe_print(f"[*] 符合条件: {total} 条")
     for d in trading_days:
         count = len(filtered.get(d, []))
         if count > 0:
             _safe_print(f"    {d}: {count} 只")
+        elif d in no_ml_data_dates:
+            _safe_print(f"    {d}: 无 ML 预测数据")
 
     # ── 生成报告 ──
-    report = generate_report(filtered, trading_days, threshold)
+    report = generate_report(filtered, trading_days, threshold, weeks=weeks, no_ml_data_dates=no_ml_data_dates)
 
     # ── 写入文件 ──
     _write_report(report, write_mode)
