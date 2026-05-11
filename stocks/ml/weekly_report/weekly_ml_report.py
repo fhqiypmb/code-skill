@@ -1,0 +1,542 @@
+"""
+周度 ML 预测报告生成器
+=====================
+从 shadow_data.json 中筛选上一周交易日 ml_predict_prob >= 阈值的股票，
+生成美观的 Markdown 报告。
+
+输出字段：股票名称、股票代码、信号类型、周期、信号价格、资金净流入(流入/流出)、动能、最高价、ML预测概率
+
+用法:
+    python weekly_ml_report.py                  # 默认阈值 60，覆盖已有报告
+    python weekly_ml_report.py --threshold 70   # 自定义阈值
+    python weekly_ml_report.py --mode new       # 删除旧报告再写新报告（默认覆盖）
+"""
+
+import json
+import os
+import sys
+from datetime import datetime, timedelta
+from typing import List, Dict, Set
+
+# ─────────────────── 路径配置 ───────────────────
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_ML_DIR = os.path.dirname(_SCRIPT_DIR)          # stocks/ml/
+_STOCKS_DIR = os.path.dirname(_ML_DIR)           # stocks/
+
+DATA_FILE = os.path.join(_ML_DIR, "shadow_data.json")
+HOLIDAYS_FILE = os.path.join(_STOCKS_DIR, "stock_monitor", "holidays.json")
+OUTPUT_FILE = os.path.join(_SCRIPT_DIR, "weekly_ml_report.md")
+
+# ─────────────────── Emoji 定义 ───────────────────
+E_FIRE      = "\U0001f525"   # 🔥
+E_GREEN     = "\U0001f7e2"   # 🟢
+E_YELLOW    = "\U0001f7e1"   # 🟡
+E_RED       = "\U0001f534"   # 🔴
+E_WHITE     = "\u26aa"       # ⚪
+E_CHART     = "\U0001f4ca"   # 📊
+E_CALENDAR  = "\U0001f4c5"   # 📅
+E_TARGET    = "\U0001f3af"   # 🎯
+E_UP        = "\U0001f4c8"   # 📈
+E_EMPTY     = "\U0001f4ed"   # 📭
+E_CLIPBOARD = "\U0001f4cb"   # 📋
+E_BOOK      = "\U0001f4d6"   # 📖
+E_REPEAT    = "\U0001f501"   # 🔁
+E_MONEY     = "\U0001f4b0"   # 💰
+E_ROCKET    = "\U0001f680"   # 🚀
+E_PIN       = "\U0001f4cc"   # 📌
+
+
+# ─────────────────── 终端兼容（GBK / UTF-8） ───────────────────
+
+def _safe_print(msg: str):
+    """安全输出，兼容 GBK 终端"""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        print(msg.encode("gbk", "replace").decode("gbk"))
+
+
+def _safe_input(prompt: str) -> str:
+    """安全输入，兼容 GBK 终端"""
+    try:
+        return input(prompt)
+    except UnicodeEncodeError:
+        return input(prompt.encode("gbk", "replace").decode("gbk"))
+
+
+# ─────────────────── 交易日计算 ───────────────────
+
+def _load_holidays() -> Set[str]:
+    """加载法定假日（落在工作日的休市日）"""
+    if not os.path.exists(HOLIDAYS_FILE):
+        return set()
+    with open(HOLIDAYS_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    holidays = set()
+    for year_key, dates in data.items():
+        if year_key.startswith("_"):
+            continue
+        holidays.update(dates)
+    return holidays
+
+
+def _get_last_week_trading_days(today: datetime = None) -> List[str]:
+    """
+    根据今天日期，返回「上一周」的交易日列表。
+    "上一周"始终指上个自然周（周一~周日）中的交易日。
+    自动排除周末和 holidays.json 中的法定假日。
+    返回格式: ['2026-05-06', '2026-05-07', ...]  按日期升序
+    """
+    if today is None:
+        today = datetime.now()
+
+    holidays = _load_holidays()
+
+    this_monday = today - timedelta(days=today.weekday())
+    last_monday = this_monday - timedelta(days=7)
+    last_sunday = this_monday - timedelta(days=1)
+
+    trading_days = []
+    d = last_monday
+    while d <= last_sunday:
+        ds = d.strftime("%Y-%m-%d")
+        weekday = d.weekday()
+        if weekday >= 5:
+            d += timedelta(days=1)
+            continue
+        if ds in holidays:
+            d += timedelta(days=1)
+            continue
+        trading_days.append(ds)
+        d += timedelta(days=1)
+
+    return trading_days
+
+
+# ─────────────────── 数据加载与筛选 ───────────────────
+
+def _load_data() -> List[Dict]:
+    if not os.path.exists(DATA_FILE):
+        _safe_print(f"[!] 数据文件不存在: {DATA_FILE}")
+        sys.exit(1)
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _filter_records(
+    data: List[Dict],
+    trading_days: List[str],
+    threshold: float,
+) -> Dict[str, List[Dict]]:
+    """按日期分组，筛选 ml_predict_prob >= threshold 的记录，按 prob 降序"""
+    result = {}
+    for d in trading_days:
+        items = [
+            r for r in data
+            if r.get("date") == d
+            and isinstance(r.get("ml_predict_prob"), (int, float))
+            and r["ml_predict_prob"] >= threshold
+        ]
+        items.sort(key=lambda x: x["ml_predict_prob"], reverse=True)
+        if items:
+            result[d] = items
+    return result
+
+
+# ─────────────────── 字段提取辅助 ───────────────────
+
+def _get_signal_price(r: Dict) -> str:
+    """出信号时的价格：优先 sc_close，其次 close"""
+    val = r.get("sc_close") or r.get("close") or ""
+    if val != "":
+        return f"{float(val):.2f}"
+    return "-"
+
+
+def _get_capital_flow(r: Dict) -> str:
+    """资金净流入金额 + 流入/流出标记（简短版，用于表格）"""
+    net_in = r.get("an_capital_main_net_in")
+    if net_in is None or net_in == "":
+        return "-"
+
+    net_in = float(net_in)
+    if net_in > 0:
+        icon = E_GREEN
+    elif net_in < 0:
+        icon = E_RED
+    else:
+        icon = E_WHITE
+
+    if abs(net_in) >= 10000:
+        amount_str = f"{abs(net_in)/10000:.2f}亿"
+    else:
+        amount_str = f"{abs(net_in):.0f}万"
+
+    sign = "+" if net_in > 0 else ("-" if net_in < 0 else "")
+    return f"{icon}{sign}{amount_str}"
+
+
+def _get_capital_net_value(r: Dict) -> float:
+    """获取资金净流入原始数值，用于排序"""
+    net_in = r.get("an_capital_main_net_in")
+    if net_in is None or net_in == "":
+        return 0
+    return float(net_in)
+
+
+def _get_momentum(r: Dict) -> str:
+    """动能评分"""
+    val = r.get("an_success_rate_dim_momentum")
+    if val is None or val == "":
+        return "-"
+    val = float(val)
+    if val >= 80:
+        return f"{E_FIRE} **{val:.1f}**"
+    elif val >= 60:
+        return f"{E_GREEN} {val:.1f}"
+    elif val >= 40:
+        return f"{E_YELLOW} {val:.1f}"
+    else:
+        return f"{E_WHITE} {val:.1f}"
+
+
+def _get_high(r: Dict) -> str:
+    """最高价：优先 an_quote_high，其次 max_high"""
+    val = r.get("an_quote_high") or r.get("max_high") or ""
+    if val != "":
+        return f"{float(val):.2f}"
+    return "-"
+
+
+def _get_prob_str(prob: float) -> str:
+    """概率等级标记"""
+    if prob >= 90:
+        return f"{E_FIRE} **{prob:.1f}%**"
+    elif prob >= 80:
+        return f"{E_GREEN} **{prob:.1f}%**"
+    elif prob >= 70:
+        return f"{E_YELLOW} {prob:.1f}%"
+    else:
+        return f"{E_WHITE} {prob:.1f}%"
+
+
+# ─────────────────── Markdown 生成 ───────────────────
+
+WEEKDAY_CN = ["一", "二", "三", "四", "五", "六", "日"]
+
+
+def _weekday_cn(date_str: str) -> str:
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    return WEEKDAY_CN[d.weekday()]
+
+
+def _render_table(records: List[Dict]) -> str:
+    """渲染单日详情表格"""
+    lines = []
+    lines.append("| # | 代码 | 名称 | 信号类型 | 周期 | 信号价格 | 资金净流入 | 动能 | 最高价 | ML预测概率 |")
+    lines.append("|:---:|:----:|:----:|:-------:|:---:|:-------:|:---------:|:---:|:-----:|:---------:|")
+    for i, r in enumerate(records, 1):
+        code = r.get("code", "")
+        name = r.get("name", "")
+        signal_type = r.get("signal_type", "")
+        period = r.get("period", "")
+        signal_price = _get_signal_price(r)
+        capital_flow = _get_capital_flow(r)
+        momentum = _get_momentum(r)
+        high = _get_high(r)
+        prob = r.get("ml_predict_prob", 0)
+        prob_str = _get_prob_str(prob)
+        lines.append(
+            f"| {i} | {code} | {name} | {signal_type} | {period} "
+            f"| {signal_price} | {capital_flow} | {momentum} | {high} | {prob_str} |"
+        )
+    return "\n".join(lines)
+
+
+def generate_report(
+    filtered: Dict[str, List[Dict]],
+    trading_days: List[str],
+    threshold: float,
+) -> str:
+    """生成完整 Markdown 报告"""
+    today = datetime.now()
+    total = sum(len(v) for v in filtered.values())
+
+    lines = []
+
+    # ── 标题区 ──
+    lines.append(f"# {E_CHART} ML 预测概率周报")
+    lines.append("")
+    lines.append(f"> {E_CALENDAR} 生成时间：{today.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"> {E_CALENDAR} 报告周期：{trading_days[0]} ~ {trading_days[-1]}")
+    lines.append(f"> {E_TARGET} 筛选阈值：`ml_predict_prob >= {threshold}%`")
+    lines.append(f"> {E_UP} 符合条件：**{total}** 只股票")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    if not filtered:
+        lines.append(f"## {E_EMPTY} 无符合条件的数据")
+        lines.append("")
+        lines.append(f"上一周交易日中没有 `ml_predict_prob >= {threshold}%` 的记录。")
+        lines.append("")
+        return "\n".join(lines)
+
+    # ── 每日概览 ──
+    lines.append(f"## {E_CLIPBOARD} 每日概览")
+    lines.append("")
+    lines.append("| 日期 | 数量 | 最高概率股 | 资金净流入最优 | 动能最强 |")
+    lines.append("|:----:|:----:|:---------:|:-------------:|:-------:|")
+    for d in trading_days:
+        count = len(filtered.get(d, []))
+        if count > 0:
+            recs = filtered[d]
+            top_prob = recs[0]
+            top_prob_info = f"{top_prob['name']}({top_prob['ml_predict_prob']:.1f}%)"
+            top_capital = max(recs, key=_get_capital_net_value)
+            cap_net = _get_capital_net_value(top_capital)
+            if cap_net > 0:
+                cap_info = f"{top_capital['name']}(+{cap_net:.0f}万)"
+            else:
+                best = min(recs, key=_get_capital_net_value)
+                best_net = _get_capital_net_value(best)
+                cap_info = f"{best['name']}({best_net:.0f}万)"
+            top_mom = max(recs, key=lambda x: float(x.get("an_success_rate_dim_momentum") or 0))
+            mom_val = float(top_mom.get("an_success_rate_dim_momentum") or 0)
+            mom_info = f"{top_mom['name']}({mom_val:.1f})"
+            lines.append(f"| 周{_weekday_cn(d)} {d[5:]} | {count} 只 | {top_prob_info} | {cap_info} | {mom_info} |")
+        else:
+            lines.append(f"| 周{_weekday_cn(d)} {d[5:]} | 0 只 | - | - | - |")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # ── 每日详情 ──
+    lines.append(f"## {E_UP} 每日详情")
+    lines.append("")
+
+    # 标记说明
+    lines.append("<details>")
+    lines.append(f"<summary>{E_BOOK} 标记说明</summary>")
+    lines.append("")
+    lines.append("**概率等级**")
+    lines.append("")
+    lines.append("| 标记 | 含义 |")
+    lines.append("|:----:|:----:|")
+    lines.append(f"| {E_FIRE} | >= 90% |")
+    lines.append(f"| {E_GREEN} | >= 80% |")
+    lines.append(f"| {E_YELLOW} | >= 70% |")
+    lines.append(f"| {E_WHITE} | < 70% |")
+    lines.append("")
+    lines.append("**资金流向**")
+    lines.append("")
+    lines.append("| 标记 | 含义 |")
+    lines.append("|:----:|:----:|")
+    lines.append(f"| {E_GREEN} | 主力净流入 |")
+    lines.append(f"| {E_RED} | 主力净流出 |")
+    lines.append(f"| {E_WHITE} | 持平 |")
+    lines.append("")
+    lines.append("**动能**")
+    lines.append("")
+    lines.append("| 标记 | 含义 |")
+    lines.append("|:----:|:----:|")
+    lines.append(f"| {E_FIRE} | >= 80 |")
+    lines.append(f"| {E_GREEN} | >= 60 |")
+    lines.append(f"| {E_YELLOW} | >= 40 |")
+    lines.append(f"| {E_WHITE} | < 40 |")
+    lines.append("")
+    lines.append("</details>")
+    lines.append("")
+
+    for d in trading_days:
+        if d not in filtered:
+            continue
+        records = filtered[d]
+        wd = _weekday_cn(d)
+        lines.append(f"### {E_CALENDAR} {d}（周{wd}） - {len(records)} 只")
+        lines.append("")
+        lines.append(_render_table(records))
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    # ── 多日重复出现统计 ──
+    code_count = {}
+    for d, records in filtered.items():
+        for r in records:
+            key = r.get("code", "")
+            if key not in code_count:
+                code_count[key] = {
+                    "name": r.get("name", ""),
+                    "dates": [],
+                    "probs": [],
+                    "capitals": [],
+                    "momentums": [],
+                }
+            code_count[key]["dates"].append(d)
+            code_count[key]["probs"].append(r["ml_predict_prob"])
+            cap = _get_capital_net_value(r)
+            code_count[key]["capitals"].append(cap)
+            mom = float(r.get("an_success_rate_dim_momentum") or 0)
+            code_count[key]["momentums"].append(mom)
+
+    multi_day = {k: v for k, v in code_count.items() if len(v["dates"]) >= 2}
+    if multi_day:
+        lines.append(f"## {E_REPEAT} 多日重复出现")
+        lines.append("")
+        lines.append("| 代码 | 名称 | 次数 | 日期 | 各日概率 | 各日资金(万) | 各日动能 |")
+        lines.append("|:----:|:----:|:----:|:----:|:-------:|:-----------:|:-------:|")
+        sorted_multi = sorted(
+            multi_day.items(),
+            key=lambda x: (-len(x[1]["dates"]), -sum(x[1]["probs"]) / len(x[1]["probs"]))
+        )
+        for code, info in sorted_multi:
+            dates_str = "<br>".join(info["dates"])
+            probs_str = "<br>".join(f"{p:.1f}%" for p in info["probs"])
+            caps_str = "<br>".join(
+                (f"+{c:.0f}" if c >= 0 else f"{c:.0f}") for c in info["capitals"]
+            )
+            moms_str = "<br>".join(f"{m:.1f}" for m in info["momentums"])
+            lines.append(
+                f"| {code} | {info['name']} | {len(info['dates'])} "
+                f"| {dates_str} | {probs_str} | {caps_str} | {moms_str} |"
+            )
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    # ── 资金流入 TOP ──
+    all_records = []
+    for d, records in filtered.items():
+        all_records.extend(records)
+
+    inflow_records = [r for r in all_records if _get_capital_net_value(r) > 0]
+    if inflow_records:
+        inflow_records.sort(key=_get_capital_net_value, reverse=True)
+        lines.append(f"## {E_MONEY} 资金净流入 TOP")
+        lines.append("")
+        lines.append("| # | 代码 | 名称 | 日期 | 资金净流入 | 信号价格 | 动能 | ML预测概率 |")
+        lines.append("|:---:|:----:|:----:|:----:|:---------:|:-------:|:---:|:---------:|")
+        for i, r in enumerate(inflow_records[:10], 1):
+            cap_net = _get_capital_net_value(r)
+            if cap_net >= 10000:
+                cap_str = f"+{cap_net/10000:.2f}亿"
+            else:
+                cap_str = f"+{cap_net:.2f}万"
+            lines.append(
+                f"| {i} | {r.get('code','')} | {r.get('name','')} | {r.get('date','')} "
+                f"| {cap_str} | {_get_signal_price(r)} | {_get_momentum(r)} | {_get_prob_str(r['ml_predict_prob'])} |"
+            )
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    # ── 动能 TOP ──
+    if all_records:
+        momentum_sorted = sorted(
+            all_records,
+            key=lambda x: float(x.get("an_success_rate_dim_momentum") or 0),
+            reverse=True,
+        )
+        lines.append(f"## {E_ROCKET} 动能 TOP")
+        lines.append("")
+        lines.append("| # | 代码 | 名称 | 日期 | 动能 | 信号价格 | 资金净流入 | ML预测概率 |")
+        lines.append("|:---:|:----:|:----:|:----:|:---:|:-------:|:---------:|:---------:|")
+        for i, r in enumerate(momentum_sorted[:10], 1):
+            mom_val = float(r.get("an_success_rate_dim_momentum") or 0)
+            lines.append(
+                f"| {i} | {r.get('code','')} | {r.get('name','')} | {r.get('date','')} "
+                f"| {mom_val:.1f} | {_get_signal_price(r)} | {_get_capital_flow(r)} | {_get_prob_str(r['ml_predict_prob'])} |"
+            )
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    # ── 页脚 ──
+    lines.append(f"<sup>{E_PIN} 数据来源：`stocks/ml/shadow_data.json` | 由 `weekly_ml_report.py` 自动生成</sup>")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+# ─────────────────── 文件写入 ───────────────────
+
+def _write_report(content: str, mode: str = "overwrite") -> None:
+    out_path = OUTPUT_FILE
+    if mode == "new" and os.path.exists(out_path):
+        os.remove(out_path)
+        _safe_print(f"[x] 已删除旧报告: {out_path}")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    _safe_print(f"[OK] 报告已生成: {out_path}")
+
+
+# ─────────────────── 主流程 ───────────────────
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="ML预测概率周报生成器")
+    parser.add_argument("--threshold", "-t", type=float, default=None,
+                        help="ml_predict_prob 筛选阈值（默认交互输入，回车默认60）")
+    parser.add_argument("--mode", "-m", choices=["overwrite", "new"], default=None,
+                        help="写入模式：overwrite=覆盖（默认）, new=删除旧文件再写")
+    args = parser.parse_args()
+
+    # ── 阈值输入 ──
+    if args.threshold is not None:
+        threshold = args.threshold
+    else:
+        raw = _safe_input("[?] 请输入 ml_predict_prob 筛选阈值（直接回车默认 60）: ").strip()
+        if raw == "":
+            threshold = 60.0
+        else:
+            try:
+                threshold = float(raw)
+            except ValueError:
+                _safe_print("[!] 输入无效，使用默认值 60")
+                threshold = 60.0
+
+    _safe_print(f"[*] 筛选阈值: ml_predict_prob >= {threshold}%")
+
+    # ── 写入模式 ──
+    if args.mode is not None:
+        write_mode = args.mode
+    else:
+        if os.path.exists(OUTPUT_FILE):
+            raw = _safe_input("[?] 报告文件已存在，(O)覆盖 / (N)删除重写？[直接回车默认覆盖]: ").strip().upper()
+            write_mode = "new" if raw == "N" else "overwrite"
+        else:
+            write_mode = "overwrite"
+
+    # ── 计算上周交易日 ──
+    trading_days = _get_last_week_trading_days()
+    if not trading_days:
+        _safe_print("[!] 无法确定上周交易日")
+        sys.exit(1)
+    _safe_print(f"[*] 上周交易日: {', '.join(trading_days)}")
+
+    # ── 加载数据 ──
+    data = _load_data()
+    _safe_print(f"[*] 数据总量: {len(data)} 条")
+
+    has_prob = sum(1 for r in data if isinstance(r.get("ml_predict_prob"), (int, float)))
+    _safe_print(f"[*] 含 ml_predict_prob: {has_prob} 条")
+
+    # ── 筛选 ──
+    filtered = _filter_records(data, trading_days, threshold)
+    total = sum(len(v) for v in filtered.values())
+    _safe_print(f"[*] 符合条件: {total} 条")
+    for d in trading_days:
+        count = len(filtered.get(d, []))
+        if count > 0:
+            _safe_print(f"    {d}: {count} 只")
+
+    # ── 生成报告 ──
+    report = generate_report(filtered, trading_days, threshold)
+
+    # ── 写入文件 ──
+    _write_report(report, write_mode)
+
+
+if __name__ == "__main__":
+    main()
