@@ -1,7 +1,7 @@
 """
 周度 ML 预测报告生成器
 =====================
-从 shadow_data.json 中筛选上一周交易日 ml_predict_prob >= 阈值的股票，
+从 shadow_data.json 中筛选本周已过交易日及前N周交易日 ml_predict_prob >= 阈值的股票，
 生成美观的 Markdown 报告。
 
 输出字段：股票名称、股票代码、信号类型、周期、信号价格、资金净流入(流入/流出)、动能、最高价、ML预测概率
@@ -82,10 +82,10 @@ def _load_holidays() -> Set[str]:
 
 def _get_last_week_trading_days(today: datetime = None, weeks: int = 1) -> List[str]:
     """
-    根据今天日期，返回「近 N 周」的交易日列表。
-    weeks=1 时只取上周；weeks=3 时取上周+上上周+上上上周。
+    根据今天日期，返回「本周已过交易日 + 前 N 个完整周」的交易日列表。
+    weeks=1 时取本周已过 + 上周；weeks=3 时取本周已过 + 上周 + 上上周 + 上上上周。
     自动排除周末和 holidays.json 中的法定假日。
-    返回格式: ['2026-05-06', '2026-05-07', ...]  按日期升序
+    返回格式: ['2026-05-06', '2026-05-07', ...]  按日期降序
     """
     if today is None:
         today = datetime.now()
@@ -95,6 +95,17 @@ def _get_last_week_trading_days(today: datetime = None, weeks: int = 1) -> List[
     this_monday = today - timedelta(days=today.weekday())
 
     trading_days = []
+
+    # ── 1. 本周已过交易日（this_monday ~ today，含今天） ──
+    d = this_monday
+    while d <= today:
+        ds = d.strftime("%Y-%m-%d")
+        weekday = d.weekday()
+        if weekday < 5 and ds not in holidays:
+            trading_days.append(ds)
+        d += timedelta(days=1)
+
+    # ── 2. 前 N 个完整周 ──
     for w in range(weeks):
         week_monday = this_monday - timedelta(days=7 * (w + 1))
         week_sunday = this_monday - timedelta(days=7 * w + 1)
@@ -327,7 +338,7 @@ def generate_report(
     today = datetime.now()
     total = sum(len(v) for v in filtered.values())
 
-    weeks_label = f"近 {weeks} 周" if weeks > 1 else "上周"
+    weeks_label = f"本周 + 近 {weeks} 周" if weeks > 1 else "本周 + 上周"
 
     lines = []
 
@@ -576,7 +587,7 @@ def main():
     args = parser.parse_args()
 
     # ── 周数输入 ──
-    raw = _safe_input("[?] 统计近几周数据？（直接回车默认 1，即上周）: ").strip()
+    raw = _safe_input("[?] 统计近几周数据？（直接回车默认 1，即本周+上周）: ").strip()
     if raw == "":
         weeks = 1
     else:
@@ -588,7 +599,7 @@ def main():
         except ValueError:
             _safe_print("[!] 输入无效，使用默认值 1")
             weeks = 1
-    weeks_label = f"近 {weeks} 周" if weeks > 1 else "上周"
+    weeks_label = f"本周 + 近 {weeks} 周" if weeks > 1 else "本周 + 上周"
     _safe_print(f"[*] 统计范围: {weeks_label}")
 
     # ── 阈值输入 ──
