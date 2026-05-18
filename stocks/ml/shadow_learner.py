@@ -444,6 +444,14 @@ def train() -> Optional[Any]:
     logger.info(f"训练集准确率: {train_acc:.2%}  测试集准确率: {test_acc:.2%}")
     logger.info(f"\n{classification_report(y_test, model.predict(X_test))}")
 
+    test_probs = model.predict_proba(X_test)[:, 1] * 100
+    prob_bucket_stats = _calc_probability_buckets(test_probs, y_test)
+    logger.info("测试集概率桶命中率:")
+    for s in prob_bucket_stats:
+        logger.info(
+            f"  {s['label']}: {s['total']}个信号，命中{s['hit']}个，命中率{s['hit_rate']:.1%}"
+        )
+
     # CalibratedClassifierCV 内部有 cv=5 个 base estimator，取平均特征重要性
     all_imps = np.array([
         cc.estimator.feature_importances_
@@ -464,6 +472,7 @@ def train() -> Optional[Any]:
         'importance':    importance,
         'train_acc':     train_acc,
         'test_acc':      test_acc,
+        'prob_bucket_stats': prob_bucket_stats,
         'train_date':    datetime.now().strftime('%Y-%m-%d'),
         'sample_count':  len(labeled),
         'train_end_date':  train_end_date,
@@ -480,6 +489,29 @@ def train() -> Optional[Any]:
     _save_report(bundle, labeled, y, feature_fields, reg_bundle)
 
     return model
+
+
+def _calc_probability_buckets(probabilities, labels) -> List[Dict]:
+    """按实战阈值统计测试集概率桶命中率"""
+    buckets = [
+        (">=40%", lambda p: p >= 40),
+        ("35%-40%", lambda p: 35 <= p < 40),
+        ("30%-35%", lambda p: 30 <= p < 35),
+        ("25%-30%", lambda p: 25 <= p < 30),
+        ("<25%", lambda p: p < 25),
+    ]
+    stats = []
+    for label, predicate in buckets:
+        indexes = [i for i, p in enumerate(probabilities) if predicate(float(p))]
+        total = len(indexes)
+        hit = int(sum(int(labels[i]) for i in indexes)) if total else 0
+        stats.append({
+            'label': label,
+            'total': total,
+            'hit': hit,
+            'hit_rate': hit / total if total else 0,
+        })
+    return stats
 
 
 # ==================== 回归模型：预测最大涨幅 ====================
@@ -702,6 +734,19 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
         lines.append(f"> 📌 **校准后的概率含义**: 模型说60%即代表约60%概率达标。"
                      f"由于整体基准达标率仅约 {sum(r.get('reached_target',0) for r in labeled)/len(labeled):.1%}，"
                      f"实战建议关注**概率 >= 40%** 的信号。")
+
+    # ── 测试集概率桶命中率 ──
+    prob_bucket_stats = bundle.get('prob_bucket_stats', [])
+    if prob_bucket_stats:
+        lines.append(f"\n### 测试集概率桶命中率")
+        lines.append("只统计时间序列切分后的测试集，用来验证每个概率区间的真实命中率。")
+        lines.append("")
+        lines.append("| 概率区间 | 信号数 | 命中数 | 命中率 |")
+        lines.append("|----------|--------|--------|--------|")
+        for s in prob_bucket_stats:
+            lines.append(
+                f"| {s['label']} | {s['total']} | {s['hit']} | {s['hit_rate']:.1%} |"
+            )
 
     # ── 特征重要性 TOP20（容易上涨的信号特征） ──
     lines.append(f"\n### 特征重要性 TOP20")

@@ -7,8 +7,8 @@
 输出字段：股票名称、股票代码、信号类型、周期、信号价格、资金净流入(流入/流出)、动能、最高价、ML预测概率
 
 用法:
-    python weekly_ml_report.py                  # 默认阈值 60，覆盖已有报告，默认近1周
-    python weekly_ml_report.py --threshold 70   # 自定义阈值
+    python weekly_ml_report.py                  # 默认阈值 40，覆盖已有报告，默认近1周
+    python weekly_ml_report.py --threshold 50   # 自定义阈值
     python weekly_ml_report.py --mode new       # 删除旧报告再写新报告（默认覆盖）
 """
 
@@ -580,7 +580,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="ML预测概率周报生成器")
     parser.add_argument("--threshold", "-t", type=float, default=None,
-                        help="ml_predict_prob 筛选阈值（默认交互输入，回车默认60）")
+                        help="ml_predict_prob 筛选阈值（默认交互输入，回车默认40）")
 
     parser.add_argument("--mode", "-m", choices=["overwrite", "new"], default=None,
                         help="写入模式：overwrite=覆盖（默认）, new=删除旧文件再写")
@@ -606,15 +606,15 @@ def main():
     if args.threshold is not None:
         threshold = args.threshold
     else:
-        raw = _safe_input("[?] 请输入 ml_predict_prob 筛选阈值（直接回车默认 60）: ").strip()
+        raw = _safe_input("[?] 请输入 ml_predict_prob 筛选阈值（直接回车默认 40）: ").strip()
         if raw == "":
-            threshold = 60.0
+            threshold = 40.0
         else:
             try:
                 threshold = float(raw)
             except ValueError:
-                _safe_print("[!] 输入无效，使用默认值 60")
-                threshold = 60.0
+                _safe_print("[!] 输入无效，使用默认值 40")
+                threshold = 40.0
 
     _safe_print(f"[*] 筛选阈值: ml_predict_prob >= {threshold}%")
 
@@ -623,10 +623,10 @@ def main():
         write_mode = args.mode
     else:
         if os.path.exists(OUTPUT_FILE):
-            raw = _safe_input("[?] 报告文件已存在，(O)覆盖 / (N)删除重写？[直接回车默认覆盖]: ").strip().upper()
-            write_mode = "new" if raw == "N" else "overwrite"
+            raw = _safe_input("[?] 报告文件已存在，(O)覆盖 / (N)删除重写？[直接回车默认删除重写]: ").strip().upper()
+            write_mode = "overwrite" if raw == "O" else "new"
         else:
-            write_mode = "overwrite"
+            write_mode = "new"
 
     # ── 计算近N周交易日 ──
     trading_days = _get_last_week_trading_days(weeks=weeks)
