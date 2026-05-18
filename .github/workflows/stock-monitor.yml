@@ -97,6 +97,7 @@ jobs:
         run: pip install pyyaml scikit-learn joblib numpy
 
       - name: Run monitor
+        timeout-minutes: 340
         env:
           DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
           DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
@@ -108,7 +109,7 @@ jobs:
           fi
 
       - name: Commit signals
-        if: "!cancelled()"
+        if: always() && !cancelled()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
