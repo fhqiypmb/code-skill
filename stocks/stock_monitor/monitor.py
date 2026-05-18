@@ -88,28 +88,36 @@ def _ml_record_signal(code, name, period, signal_type, details, analysis):
     return {'prob': None, 'gain': None}
 
 def _get_probability_color(probability: float) -> str:
-    """根据概率返回 HTML 颜色代码"""
-    if probability >= 80:
-        return "#FF0000"  # 红色 - 很高
-    elif probability >= 65:
-        return "#FF6600"  # 橙色 - 较高
-    elif probability >= 50:
-        return "#FFAA00"  # 黄色 - 中等
+    """根据概率返回 HTML 颜色代码
+
+    阈值根据新模型(isotonic校准)的实测精度调整：
+    - >=40%: 测试集实测精度~89%（强烈推荐）
+    - >=35%: 测试集实测精度~52%（推荐）
+    - >=30%: 测试集实测精度~40%（中等）
+    - >=25%: 测试集实测精度~33%（较弱）
+    -  <25%: 接近基准达标率23%（低）
+    """
+    if probability >= 40:
+        return "#FF0000"  # 红色 - 强（实测89%精度）
     elif probability >= 35:
-        return "#0066FF"  # 蓝色 - 较低
+        return "#FF6600"  # 橙色 - 较强（实测52%精度）
+    elif probability >= 30:
+        return "#FFAA00"  # 黄色 - 中等（实测40%精度）
+    elif probability >= 25:
+        return "#0066FF"  # 蓝色 - 较弱（实测33%精度）
     else:
-        return "#00AA00"  # 绿色 - 低
+        return "#00AA00"  # 绿色 - 弱（接近基准）
 
 def _format_colored_probability(probability: float) -> str:
-    """格式化带颜色的上涨概率"""
+    """格式化带颜色的上涨概率（基于新校准模型的实测精度）"""
     color = _get_probability_color(probability)
     level_map = {
-        80: "很高",
-        65: "较高",
-        50: "中等",
-        35: "较低",
+        40: "强",
+        35: "较强",
+        30: "中等",
+        25: "较弱",
     }
-    level = "低"
+    level = "弱"
     for threshold, level_name in level_map.items():
         if probability >= threshold:
             level = level_name

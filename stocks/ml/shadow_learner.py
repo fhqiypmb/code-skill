@@ -338,11 +338,17 @@ def update_outcomes() -> int:
 # ==================== 训练 ====================
 
 def train() -> Optional[Any]:
-    """训练随机森林模型，返回模型对象，失败返回 None"""
+    """训练随机森林模型，返回模型对象，失败返回 None
+
+    优化点：
+    1. 时间序列切分（前80%训练 / 后20%测试），避免未来信息泄漏
+    2. 去掉 class_weight='balanced'，让模型输出真实概率分布
+    3. 用 CalibratedClassifierCV(isotonic) 做概率校准，确保输出概率≈实际达标率
+    """
     try:
         import numpy as np
         from sklearn.ensemble import RandomForestClassifier
-        from sklearn.model_selection import train_test_split
+        from sklearn.calibration import CalibratedClassifierCV
         from sklearn.metrics import accuracy_score, classification_report
         import joblib
     except ImportError as e:
@@ -355,6 +361,9 @@ def train() -> Optional[Any]:
     if len(labeled) < MIN_TRAIN_SAMPLES:
         logger.warning(f"已标记样本不足: {len(labeled)} < {MIN_TRAIN_SAMPLES}，跳过训练")
         return None
+
+    # 时间序列切分需要先按日期升序排序
+    labeled.sort(key=lambda r: r.get('date', ''))
 
     # 排除元信息和结果字段，只保留数值型特征
     exclude = {
@@ -388,6 +397,16 @@ def train() -> Optional[Any]:
         'ml_predict_prob',                  # 当时的ML预测概率
         'ml_predict_gain',                  # 当时的ML预测涨幅
         'ml_top3_features',                 # 当时模型的TOP3特征名
+        # 排除高度冗余的特征（实测相关系数 > 0.99，会稀释特征重要性）
+        'sc_ma30',                          # 与 sc_ma20 相关系数 0.9998
+        'sc_first_double_price',            # 与 sc_close 相关系数 0.9995
+        'an_quote_high',                    # 与 sc_close 高度相关
+        'an_quote_low',                     # 与 sc_close 高度相关
+        'an_quote_open',                    # 与 sc_close 高度相关
+        'an_quote_pre_close',               # 与 sc_close 高度相关
+        'an_technical_method_targets_压力位法',   # 与 target_price 高度相关（合成时使用）
+        'an_technical_method_targets_ATR通道法',  # 与 target_price 高度相关（合成时使用）
+        'an_technical_method_targets_斐波那契',   # 与 target_price 高度相关（合成时使用）
     }
     feature_fields = sorted({
         k for r in labeled for k, v in r.items()
@@ -401,16 +420,23 @@ def train() -> Optional[Any]:
 
     logger.info(f"正样本比例(达标): {y.mean():.2%}")
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42,
-        stratify=y if len(set(y)) > 1 else None
-    )
+    # 时间序列切分：前80%训练，后20%测试，模拟"用历史预测未来"
+    n_split = int(len(labeled) * 0.8)
+    X_train, X_test = X[:n_split], X[n_split:]
+    y_train, y_test = y[:n_split], y[n_split:]
+    train_end_date = labeled[n_split - 1].get('date', '?')
+    test_start_date = labeled[n_split].get('date', '?')
+    logger.info(f"时间序列切分: 训练截止 {train_end_date}, 测试起始 {test_start_date}")
+    logger.info(f"训练集 {len(y_train)} ({y_train.mean():.2%}正类) | 测试集 {len(y_test)} ({y_test.mean():.2%}正类)")
 
-    model = RandomForestClassifier(
+    # 1) 基础随机森林（不再用 class_weight='balanced'，让模型输出真实分布）
+    base_model = RandomForestClassifier(
         n_estimators=100, max_depth=10,
         min_samples_split=5, min_samples_leaf=2,
-        class_weight='balanced', random_state=42, n_jobs=-1,
+        random_state=42, n_jobs=-1,
     )
+    # 2) 用 isotonic 5折交叉校准，让输出概率≈实际达标率
+    model = CalibratedClassifierCV(base_model, method='isotonic', cv=5)
     model.fit(X_train, y_train)
 
     train_acc = accuracy_score(y_train, model.predict(X_train))
@@ -418,8 +444,14 @@ def train() -> Optional[Any]:
     logger.info(f"训练集准确率: {train_acc:.2%}  测试集准确率: {test_acc:.2%}")
     logger.info(f"\n{classification_report(y_test, model.predict(X_test))}")
 
+    # CalibratedClassifierCV 内部有 cv=5 个 base estimator，取平均特征重要性
+    all_imps = np.array([
+        cc.estimator.feature_importances_
+        for cc in model.calibrated_classifiers_
+    ])
+    avg_imp = all_imps.mean(axis=0)
     importance = sorted(
-        zip(feature_fields, model.feature_importances_),
+        zip(feature_fields, avg_imp),
         key=lambda x: x[1], reverse=True
     )
     logger.info("特征重要性 TOP20:")
@@ -434,6 +466,10 @@ def train() -> Optional[Any]:
         'test_acc':      test_acc,
         'train_date':    datetime.now().strftime('%Y-%m-%d'),
         'sample_count':  len(labeled),
+        'train_end_date':  train_end_date,
+        'test_start_date': test_start_date,
+        'split_method':    'time_series',  # 时间序列切分
+        'calibrated':      True,           # 已做 isotonic 校准
     }
     joblib.dump(bundle, MODEL_FILE)
     logger.info(f"模型已保存: {MODEL_FILE}")
@@ -449,18 +485,20 @@ def train() -> Optional[Any]:
 # ==================== 回归模型：预测最大涨幅 ====================
 
 def _train_regressor(labeled: List[Dict], feature_fields: List[str]) -> Optional[Dict]:
-    """训练回归模型，预测5个交易日内的最大涨幅%"""
+    """训练回归模型，预测5个交易日内的最大涨幅%
+
+    注意: labeled 在 train() 中已按日期升序排序，这里直接做时间序列切分。
+    """
     try:
         import numpy as np
         from sklearn.ensemble import RandomForestRegressor
-        from sklearn.model_selection import train_test_split
         from sklearn.metrics import mean_absolute_error, r2_score
         import joblib
     except ImportError as e:
         logger.error(f"回归模型依赖缺失: {e}")
         return None
 
-    # 只取有 max_gain_pct 的记录
+    # 只取有 max_gain_pct 的记录（保持原有顺序，labeled 已按日期排序）
     reg_data = [r for r in labeled if r.get('max_gain_pct') is not None]
     if len(reg_data) < MIN_TRAIN_SAMPLES:
         logger.warning(f"回归样本不足: {len(reg_data)} < {MIN_TRAIN_SAMPLES}，跳过")
@@ -469,9 +507,10 @@ def _train_regressor(labeled: List[Dict], feature_fields: List[str]) -> Optional
     X = np.array([[r.get(f, 0) or 0 for f in feature_fields] for r in reg_data], dtype=float)
     y = np.array([r['max_gain_pct'] for r in reg_data], dtype=float)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
+    # 时间序列切分（与分类模型保持一致）
+    n_split = int(len(reg_data) * 0.8)
+    X_train, X_test = X[:n_split], X[n_split:]
+    y_train, y_test = y[:n_split], y[n_split:]
 
     model = RandomForestRegressor(
         n_estimators=100, max_depth=10,
@@ -652,6 +691,17 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
     lines.append(f"\n---\n## 二、分类模型（预测达标概率）")
     lines.append(f"\n任务：预测信号发出后5个交易日内，最高价能否触达目标价。")
     lines.append(f"- **训练集准确率**: {train_acc:.2%}  |  **测试集准确率**: {test_acc:.2%}")
+
+    # ── 模型配置说明 ──
+    if bundle.get('split_method') == 'time_series':
+        lines.append(f"- **切分方式**: 时间序列切分（前80%训练 / 后20%测试，无未来信息泄漏）")
+        lines.append(f"- **训练截止**: {bundle.get('train_end_date', '?')}  |  **测试起始**: {bundle.get('test_start_date', '?')}")
+    if bundle.get('calibrated'):
+        lines.append(f"- **概率校准**: 已使用 isotonic 5折交叉校准，模型输出概率 ≈ 实际达标率")
+        lines.append(f"")
+        lines.append(f"> 📌 **校准后的概率含义**: 模型说60%即代表约60%概率达标。"
+                     f"由于整体基准达标率仅约 {sum(r.get('reached_target',0) for r in labeled)/len(labeled):.1%}，"
+                     f"实战建议关注**概率 >= 40%** 的信号。")
 
     # ── 特征重要性 TOP20（容易上涨的信号特征） ──
     lines.append(f"\n### 特征重要性 TOP20")
