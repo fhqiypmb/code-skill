@@ -4,7 +4,7 @@
 从 shadow_data.json 中筛选本周已过交易日及前N周交易日 ml_predict_prob >= 阈值的股票，
 生成美观的 Markdown 报告。
 
-输出字段：股票名称、股票代码、信号类型、周期、信号价格、资金净流入(流入/流出)、动能、最高价、ML预测概率
+输出字段：股票名称、股票代码、信号类型、周期、信号价格、资金净流入(流入/流出)、动能、最高价、ML达标概率、ML潜力概率
 
 用法:
     python weekly_ml_report.py                  # 默认阈值 40，覆盖已有报告，默认近1周
@@ -262,21 +262,20 @@ def _get_high(r: Dict) -> str:
     return "-"
 
 
-def _get_predict_gain(r: Dict) -> str:
-    """ML预测上涨百分比"""
-    val = r.get("ml_predict_gain")
+def _get_predict_potential(r: Dict) -> str:
+    """ML潜力概率：当前表示5日内最大涨幅 >= 8%的概率"""
+    val = r.get("ml_predict_potential")
     if val is None or val == "":
         return "-"
     val = float(val)
-    sign = "+" if val >= 0 else ""
-    if val >= 10:
-        return f"{E_FIRE} **{sign}{val:.1f}%**"
-    elif val >= 5:
-        return f"{E_RED} {sign}{val:.1f}%"
-    elif val >= 0:
-        return f"{E_YELLOW} {sign}{val:.1f}%"
+    if val >= 60:
+        return f"{E_FIRE} **{val:.1f}%**"
+    elif val >= 50:
+        return f"{E_RED} **{val:.1f}%**"
+    elif val >= 40:
+        return f"{E_YELLOW} {val:.1f}%"
     else:
-        return f"{E_GREEN} {val:.1f}%"
+        return f"{E_WHITE} {val:.1f}%"
 
 
 def _get_prob_str(prob: float) -> str:
@@ -304,7 +303,7 @@ def _weekday_cn(date_str: str) -> str:
 def _render_table(records: List[Dict]) -> str:
     """渲染单日详情表格"""
     lines = []
-    lines.append("| # | 代码 | 名称 | 信号类型 | 周期 | 信号价格 | 资金净流入 | 动能 | 回填最高价 | ML预测概率 | ML预测涨幅 |")
+    lines.append("| # | 代码 | 名称 | 信号类型 | 周期 | 信号价格 | 资金净流入 | 动能 | 回填最高价 | ML达标概率 | ML潜力概率 |")
     lines.append("|:---:|:----:|:----:|:-------:|:---:|:-------:|:---------:|:---:|:---------:|:---------:|:---------:|")
     for i, r in enumerate(records, 1):
         code = r.get("code", "")
@@ -317,10 +316,10 @@ def _render_table(records: List[Dict]) -> str:
         high = _get_high(r)
         prob = r.get("ml_predict_prob", 0)
         prob_str = _get_prob_str(prob)
-        gain_str = _get_predict_gain(r)
+        potential_str = _get_predict_potential(r)
         lines.append(
             f"| {i} | {code} | {name} | {signal_type} | {period} "
-            f"| {signal_price} | {capital_flow} | {momentum} | {high} | {prob_str} | {gain_str} |"
+            f"| {signal_price} | {capital_flow} | {momentum} | {high} | {prob_str} | {potential_str} |"
         )
     return "\n".join(lines)
 

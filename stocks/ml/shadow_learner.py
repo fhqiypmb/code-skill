@@ -17,13 +17,18 @@ logger = logging.getLogger(__name__)
 _ML_DIR   = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE  = os.path.join(_ML_DIR, 'shadow_data.json')
 MODEL_FILE = os.path.join(_ML_DIR, 'shadow_model.pkl')
-REGRESSOR_FILE = os.path.join(_ML_DIR, 'shadow_regressor.pkl')
+POTENTIAL_MODEL_FILE = os.path.join(_ML_DIR, 'shadow_potential_model.pkl')
 
 # 多少个交易日后回填实际结果
 OUTCOME_DAYS = 5
 
 # 训练所需的最少已标记样本数
 MIN_TRAIN_SAMPLES = 45
+
+# 十倍/百倍早期潜力模型：在现有5日样本内，先学习“高弹性爆发”标签。
+# 当前数据源没有财务/市值/估值，不能直接学习真正10倍/100倍；
+# 先用“5日内最大涨幅 >= 8%”作为早期可验证代理标签。
+POTENTIAL_GAIN_THRESHOLD_PCT = 8.0
 
 
 # ==================== 数据读写 ====================
@@ -483,10 +488,10 @@ def train() -> Optional[Any]:
     joblib.dump(bundle, MODEL_FILE)
     logger.info(f"模型已保存: {MODEL_FILE}")
 
-    # 同时训练回归模型（预测最大涨幅）
-    reg_bundle = _train_regressor(labeled, feature_fields)
+    # 同时训练十倍/百倍早期潜力模型（用高弹性爆发作为当前可验证代理标签）
+    potential_bundle = _train_potential_model(labeled, feature_fields)
 
-    _save_report(bundle, labeled, y, feature_fields, reg_bundle)
+    _save_report(bundle, labeled, y, feature_fields, potential_bundle)
 
     return model
 
@@ -514,54 +519,84 @@ def _calc_probability_buckets(probabilities, labels) -> List[Dict]:
     return stats
 
 
-# ==================== 回归模型：预测最大涨幅 ====================
+# ==================== 十倍/百倍早期潜力模型 ====================
 
-def _train_regressor(labeled: List[Dict], feature_fields: List[str]) -> Optional[Dict]:
-    """训练回归模型，预测5个交易日内的最大涨幅%
+def _train_potential_model(labeled: List[Dict], feature_fields: List[str]) -> Optional[Dict]:
+    """训练早期潜力模型。
 
-    注意: labeled 在 train() 中已按日期升序排序，这里直接做时间序列切分。
+    当前数据源缺少市值、估值、营收、利润、ROE、现金流、研发、机构持仓等长期因子，
+    不能直接给“真实十倍/百倍概率”打标签。因此这里使用现有样本中可回测、可验证的
+    代理目标：信号后5个交易日内最大涨幅 >= POTENTIAL_GAIN_THRESHOLD_PCT。
+
+    它的作用不是替代短线分类模型，而是辅助判断“上涨空间/后续爆发潜力”：
+    短线达标概率负责确定性，潜力概率负责弹性空间。
     """
     try:
         import numpy as np
-        from sklearn.ensemble import RandomForestRegressor
-        from sklearn.metrics import mean_absolute_error, r2_score
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.calibration import CalibratedClassifierCV
+        from sklearn.metrics import accuracy_score, classification_report
         import joblib
     except ImportError as e:
-        logger.error(f"回归模型依赖缺失: {e}")
+        logger.error(f"潜力模型依赖缺失: {e}")
         return None
 
-    # 只取有 max_gain_pct 的记录（保持原有顺序，labeled 已按日期排序）
-    reg_data = [r for r in labeled if r.get('max_gain_pct') is not None]
-    if len(reg_data) < MIN_TRAIN_SAMPLES:
-        logger.warning(f"回归样本不足: {len(reg_data)} < {MIN_TRAIN_SAMPLES}，跳过")
+    potential_data = [r for r in labeled if r.get('max_gain_pct') is not None]
+    if len(potential_data) < MIN_TRAIN_SAMPLES:
+        logger.warning(f"潜力模型样本不足: {len(potential_data)} < {MIN_TRAIN_SAMPLES}，跳过")
         return None
 
-    X = np.array([[r.get(f, 0) or 0 for f in feature_fields] for r in reg_data], dtype=float)
-    y = np.array([r['max_gain_pct'] for r in reg_data], dtype=float)
+    X = np.array([[r.get(f, 0) or 0 for f in feature_fields] for r in potential_data], dtype=float)
+    y = np.array([
+        1 if float(r.get('max_gain_pct') or 0) >= POTENTIAL_GAIN_THRESHOLD_PCT else 0
+        for r in potential_data
+    ], dtype=int)
+
+    if len(set(y.tolist())) < 2:
+        logger.warning("潜力模型只有单一类别，跳过训练")
+        return None
 
     # 时间序列切分（与分类模型保持一致）
-    n_split = int(len(reg_data) * 0.8)
+    n_split = int(len(potential_data) * 0.8)
     X_train, X_test = X[:n_split], X[n_split:]
     y_train, y_test = y[:n_split], y[n_split:]
 
-    model = RandomForestRegressor(
+    if len(set(y_train.tolist())) < 2:
+        logger.warning("潜力模型训练集只有单一类别，跳过训练")
+        return None
+
+    base_model = RandomForestClassifier(
         n_estimators=100, max_depth=10,
         min_samples_split=5, min_samples_leaf=2,
         random_state=42, n_jobs=-1,
     )
+    model = CalibratedClassifierCV(base_model, method='isotonic', cv=5)
     model.fit(X_train, y_train)
 
-    train_pred = model.predict(X_train)
-    test_pred = model.predict(X_test)
-    train_mae = mean_absolute_error(y_train, train_pred)
-    test_mae = mean_absolute_error(y_test, test_pred)
-    test_r2 = r2_score(y_test, test_pred)
+    train_acc = accuracy_score(y_train, model.predict(X_train))
+    test_acc  = accuracy_score(y_test,  model.predict(X_test))
+    logger.info(
+        f"[潜力] 标签=max_gain_pct>={POTENTIAL_GAIN_THRESHOLD_PCT:.1f}% "
+        f"正样本比例: {y.mean():.2%}"
+    )
+    logger.info(f"[潜力] 训练集准确率: {train_acc:.2%}  测试集准确率: {test_acc:.2%}")
+    logger.info(f"\n{classification_report(y_test, model.predict(X_test))}")
 
-    logger.info(f"[回归] 训练MAE: {train_mae:.2f}%  测试MAE: {test_mae:.2f}%  R²: {test_r2:.3f}")
-    logger.info(f"[回归] 实际涨幅均值: {y.mean():.2f}%  中位数: {np.median(y):.2f}%")
+    test_probs = model.predict_proba(X_test)[:, 1] * 100
+    prob_bucket_stats = _calc_potential_buckets(test_probs, y_test)
+    logger.info("潜力模型概率桶命中率:")
+    for s in prob_bucket_stats:
+        logger.info(
+            f"  {s['label']}: {s['total']}个信号，命中{s['hit']}个，命中率{s['hit_rate']:.1%}"
+        )
 
+    all_imps = np.array([
+        cc.estimator.feature_importances_
+        for cc in model.calibrated_classifiers_
+    ])
+    avg_imp = all_imps.mean(axis=0)
     importance = sorted(
-        zip(feature_fields, model.feature_importances_),
+        zip(feature_fields, avg_imp),
         key=lambda x: x[1], reverse=True
     )
 
@@ -569,17 +604,42 @@ def _train_regressor(labeled: List[Dict], feature_fields: List[str]) -> Optional
         'model':         model,
         'feature_names': feature_fields,
         'importance':    importance,
-        'train_mae':     train_mae,
-        'test_mae':      test_mae,
-        'test_r2':       test_r2,
+        'train_acc':     train_acc,
+        'test_acc':      test_acc,
+        'prob_bucket_stats': prob_bucket_stats,
         'train_date':    datetime.now().strftime('%Y-%m-%d'),
-        'sample_count':  len(reg_data),
-        'mean_gain':     round(float(y.mean()), 2),
-        'median_gain':   round(float(np.median(y)), 2),
+        'sample_count':  len(potential_data),
+        'positive_rate': round(float(y.mean()), 4),
+        'gain_threshold_pct': POTENTIAL_GAIN_THRESHOLD_PCT,
+        'model_role':    'tenbagger_seed_auxiliary',
+        'label_desc':    f'信号后{OUTCOME_DAYS}个交易日内最大涨幅 >= {POTENTIAL_GAIN_THRESHOLD_PCT:.1f}%',
     }
-    joblib.dump(bundle, REGRESSOR_FILE)
-    logger.info(f"回归模型已保存: {REGRESSOR_FILE}")
+    joblib.dump(bundle, POTENTIAL_MODEL_FILE)
+    logger.info(f"潜力模型已保存: {POTENTIAL_MODEL_FILE}")
     return bundle
+
+
+def _calc_potential_buckets(probabilities, labels) -> List[Dict]:
+    """按潜力阈值统计测试集命中率。"""
+    buckets = [
+        (">=60%", lambda p: p >= 60),
+        ("50%-60%", lambda p: 50 <= p < 60),
+        ("40%-50%", lambda p: 40 <= p < 50),
+        ("30%-40%", lambda p: 30 <= p < 40),
+        ("<30%", lambda p: p < 30),
+    ]
+    stats = []
+    for label, predicate in buckets:
+        indexes = [i for i, p in enumerate(probabilities) if predicate(float(p))]
+        total = len(indexes)
+        hit = int(sum(int(labels[i]) for i in indexes)) if total else 0
+        stats.append({
+            'label': label,
+            'total': total,
+            'hit': hit,
+            'hit_rate': hit / total if total else 0,
+        })
+    return stats
 
 
 # ==================== 特征名中文对照表（供查阅）====================
@@ -663,7 +723,7 @@ FEATURE_NAMES_ZH = {
 }
 
 
-def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str], reg_bundle: Optional[Dict] = None) -> None:
+def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str], potential_bundle: Optional[Dict] = None) -> None:
     """生成模型分析报告 model_report.md"""
     report_file = os.path.join(_ML_DIR, 'model_report.md')
     train_date  = bundle['train_date']
@@ -676,96 +736,91 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
     lines.append(f"# ML模型分析报告")
     lines.append(f"\n> **训练日期**: {train_date}（每周一自动更新）  ")
     lines.append(f"> **共用样本数**: {sample_count}（已回填实际涨跌结果的历史信号数量）  ")
-    lines.append(f"> 本系统包含两个独立模型：**分类模型**（预测能否达标）和 **回归模型**（预测最大涨幅）")
+    lines.append(
+        f"> 本系统包含两个独立模型：**短线达标分类模型**（预测能否触达目标价）和 "
+        f"**十倍/百倍早期潜力模型**（预测高弹性爆发概率，当前代理标签为5日内最大涨幅>={POTENTIAL_GAIN_THRESHOLD_PCT:.1f}%）"
+    )
 
     # ── 样本概况 ──
     lines.append(f"\n---\n## 一、样本概况")
 
     lines.append(f"\n### 按周期分布")
-    lines.append("| 周期 | 总信号 | 达标数 | 达标率 |")
-    lines.append("|------|--------|--------|--------|")
+    lines.append("| 周期 | 总信号 | 达标数 | 达标率 | 高弹性数 | 高弹性率 |")
+    lines.append("|------|--------|--------|--------|----------|----------|")
     from collections import defaultdict
-    period_stats = defaultdict(lambda: {'total': 0, 'hit': 0})
+    period_stats = defaultdict(lambda: {'total': 0, 'hit': 0, 'potential': 0})
     for r in labeled:
         p = r.get('period', '?')
         period_stats[p]['total'] += 1
-        period_stats[p]['hit']   += r.get('reached_target', 0)
+        period_stats[p]['hit'] += r.get('reached_target', 0)
+        period_stats[p]['potential'] += 1 if float(r.get('max_gain_pct') or 0) >= POTENTIAL_GAIN_THRESHOLD_PCT else 0
     for p, s in sorted(period_stats.items()):
         rate = s['hit'] / s['total'] if s['total'] else 0
-        lines.append(f"| {p} | {s['total']} | {s['hit']} | {rate:.1%} |")
+        potential_rate = s['potential'] / s['total'] if s['total'] else 0
+        lines.append(f"| {p} | {s['total']} | {s['hit']} | {rate:.1%} | {s['potential']} | {potential_rate:.1%} |")
 
     # ── 按信号类型达标率（筑底/突破/严格/普通）──
     lines.append(f"\n### 按信号类型分布")
     lines.append("信号类型说明：**筑底**=底部企稳反弹、**突破**=放量突破压力位、**严格**=金叉严格条件全满足、**普通**=金叉基本条件满足")
     lines.append("")
-    lines.append("| 信号类型 | 总信号 | 达标数 | 达标率 |")
-    lines.append("|----------|--------|--------|--------|")
+    lines.append("| 信号类型 | 总信号 | 达标数 | 达标率 | 高弹性数 | 高弹性率 |")
+    lines.append("|----------|--------|--------|--------|----------|----------|")
     type_order = ['筑底', '突破', '严格', '普通']
-    type_stats = defaultdict(lambda: {'total': 0, 'hit': 0})
+    type_stats = defaultdict(lambda: {'total': 0, 'hit': 0, 'potential': 0})
     for r in labeled:
         t = r.get('signal_type', '?')
         type_stats[t]['total'] += 1
-        type_stats[t]['hit']   += r.get('reached_target', 0)
-    # 按预定顺序输出，其余类型追加在后
+        type_stats[t]['hit'] += r.get('reached_target', 0)
+        type_stats[t]['potential'] += 1 if float(r.get('max_gain_pct') or 0) >= POTENTIAL_GAIN_THRESHOLD_PCT else 0
     shown = []
     for t in type_order:
         if t in type_stats:
             s = type_stats[t]
             rate = s['hit'] / s['total'] if s['total'] else 0
-            lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} |")
+            potential_rate = s['potential'] / s['total'] if s['total'] else 0
+            lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} | {s['potential']} | {potential_rate:.1%} |")
             shown.append(t)
     for t, s in sorted(type_stats.items()):
         if t not in shown:
             rate = s['hit'] / s['total'] if s['total'] else 0
-            lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} |")
+            potential_rate = s['potential'] / s['total'] if s['total'] else 0
+            lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} | {s['potential']} | {potential_rate:.1%} |")
 
     # ── 分类模型 ──
-    lines.append(f"\n---\n## 二、分类模型（预测达标概率）")
-    lines.append(f"\n任务：预测信号发出后5个交易日内，最高价能否触达目标价。")
+    lines.append(f"\n---\n## 二、短线达标分类模型")
+    lines.append(f"\n任务：预测信号发出后{OUTCOME_DAYS}个交易日内，最高价能否触达目标价。")
     lines.append(f"- **训练集准确率**: {train_acc:.2%}  |  **测试集准确率**: {test_acc:.2%}")
 
-    # ── 模型配置说明 ──
     if bundle.get('split_method') == 'time_series':
         lines.append(f"- **切分方式**: 时间序列切分（前80%训练 / 后20%测试，无未来信息泄漏）")
         lines.append(f"- **训练截止**: {bundle.get('train_end_date', '?')}  |  **测试起始**: {bundle.get('test_start_date', '?')}")
     if bundle.get('calibrated'):
         lines.append(f"- **概率校准**: 已使用 isotonic 5折交叉校准，模型输出概率 ≈ 实际达标率")
-        lines.append(f"")
-        lines.append(f"> 📌 **校准后的概率含义**: 模型说60%即代表约60%概率达标。"
-                     f"由于整体基准达标率仅约 {sum(r.get('reached_target',0) for r in labeled)/len(labeled):.1%}，"
-                     f"实战建议关注**概率 >= 40%** 的信号。")
+        lines.append("")
+        lines.append(
+            f"> 概率含义：短线达标概率衡量的是“先赚确定性的钱”。"
+            f"整体基准达标率约 {sum(r.get('reached_target',0) for r in labeled)/len(labeled):.1%}，"
+            f"实战建议重点关注概率 >= 40% 的信号。"
+        )
 
-    # ── 测试集概率桶命中率 ──
     prob_bucket_stats = bundle.get('prob_bucket_stats', [])
     if prob_bucket_stats:
         lines.append(f"\n### 测试集概率桶命中率")
-        lines.append("只统计时间序列切分后的测试集，用来验证每个概率区间的真实命中率。")
-        lines.append("")
         lines.append("| 概率区间 | 信号数 | 命中数 | 命中率 |")
         lines.append("|----------|--------|--------|--------|")
         for s in prob_bucket_stats:
-            lines.append(
-                f"| {s['label']} | {s['total']} | {s['hit']} | {s['hit_rate']:.1%} |"
-            )
+            lines.append(f"| {s['label']} | {s['total']} | {s['hit']} | {s['hit_rate']:.1%} |")
 
-    # ── 特征重要性 TOP20（容易上涨的信号特征） ──
     lines.append(f"\n### 特征重要性 TOP20")
-    lines.append("越靠前的特征对模型预测影响越大，可理解为「决定上涨概率的关键因子」。")
-    lines.append("")
     lines.append("| 排名 | 特征名 | 重要性得分 |")
     lines.append("|------|--------|------------|")
     for i, (fname, imp) in enumerate(importance[:20], 1):
         lines.append(f"| {i} | `{fname}` | {imp:.4f} |")
 
-    # ── 高概率 vs 低概率信号特征均值对比 ──
-    lines.append(f"\n### 高达标 vs 低达标信号特征对比")
-    lines.append("对比达标(1)和未达标(0)样本的特征均值，差异大的特征是区分好坏信号的关键。")
-    lines.append("")
+    lines.append(f"\n### 达标 vs 未达标信号特征对比")
     import numpy as np
     hit_records  = [r for r in labeled if r.get('reached_target') == 1]
     miss_records = [r for r in labeled if r.get('reached_target') == 0]
-
-    # 只取 importance TOP15 的特征做对比
     top_features = [f for f, _ in importance[:15]]
     lines.append("| 特征名 | 达标均值 | 未达标均值 | 差异 |")
     lines.append("|--------|----------|------------|------|")
@@ -778,29 +833,62 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
         direction = "↑达标更高" if diff > 0 else "↓未达标更高"
         lines.append(f"| `{fname}` | {hit_mean:.3f} | {miss_mean:.3f} | {diff:+.3f} {direction} |")
 
-    # ── 回归模型（预测涨幅） ──
-    if reg_bundle:
-        lines.append(f"\n---\n## 三、回归模型（预测最大涨幅）")
-        lines.append(f"\n任务：预测信号发出后5个交易日内的最大涨幅百分比。")
-        lines.append(f"- **样本数**: {reg_bundle.get('sample_count', '?')}")
-        lines.append(f"- **训练MAE**: {reg_bundle.get('train_mae', 0):.2f}%  |  **测试MAE**: {reg_bundle.get('test_mae', 0):.2f}%  |  **R²**: {reg_bundle.get('test_r2', 0):.3f}")
-        lines.append(f"- **实际涨幅均值**: {reg_bundle.get('mean_gain', 0):.2f}%  |  **中位数**: {reg_bundle.get('median_gain', 0):.2f}%")
-        lines.append(f"\n> MAE=预测值与实际值的平均绝对误差，越小越好。R²=模型解释力，越接近1越好。")
-        reg_imp = reg_bundle.get('importance', [])
-        if reg_imp:
-            lines.append(f"\n### 特征重要性 TOP10")
+    # ── 十倍/百倍早期潜力模型 ──
+    if potential_bundle:
+        lines.append(f"\n---\n## 三、十倍/百倍早期潜力模型")
+        lines.append(
+            f"\n任务：在当前数据源较少的阶段，先学习“高弹性爆发”而不直接宣称真实十倍/百倍。"
+            f"标签为：信号发出后{OUTCOME_DAYS}个交易日内最大涨幅 >= {potential_bundle.get('gain_threshold_pct', POTENTIAL_GAIN_THRESHOLD_PCT):.1f}%。"
+        )
+        lines.append(
+            f"\n作用：给短线达标模型做辅助。短线模型负责确定性，潜力模型负责空间。"
+            f"当短线概率一般但潜力概率高时，表示它可能不是马上涨，但具备更大的后续弹性；"
+            f"当短线概率和潜力概率同时高时，才是“看长做短”的优先信号。"
+        )
+        lines.append(f"- **样本数**: {potential_bundle.get('sample_count', '?')}")
+        lines.append(f"- **高弹性基准率**: {potential_bundle.get('positive_rate', 0):.1%}")
+        lines.append(f"- **训练集准确率**: {potential_bundle.get('train_acc', 0):.2%}  |  **测试集准确率**: {potential_bundle.get('test_acc', 0):.2%}")
+        p_stats = potential_bundle.get('prob_bucket_stats', [])
+        if p_stats:
+            lines.append(f"\n### 潜力概率桶命中率")
+            lines.append("| 潜力概率区间 | 信号数 | 高弹性命中数 | 命中率 |")
+            lines.append("|--------------|--------|--------------|--------|")
+            for s in p_stats:
+                lines.append(f"| {s['label']} | {s['total']} | {s['hit']} | {s['hit_rate']:.1%} |")
+        p_imp = potential_bundle.get('importance', [])
+        if p_imp:
+            lines.append(f"\n### 潜力模型特征重要性 TOP20")
             lines.append("| 排名 | 特征名 | 重要性得分 |")
             lines.append("|------|--------|------------|")
-            for i, (fname, imp) in enumerate(reg_imp[:10], 1):
+            for i, (fname, imp) in enumerate(p_imp[:20], 1):
                 lines.append(f"| {i} | `{fname}` | {imp:.4f} |")
+
+        high_records = [r for r in labeled if float(r.get('max_gain_pct') or 0) >= POTENTIAL_GAIN_THRESHOLD_PCT]
+        low_records = [r for r in labeled if float(r.get('max_gain_pct') or 0) < POTENTIAL_GAIN_THRESHOLD_PCT]
+        top_p_features = [f for f, _ in p_imp[:15]]
+        if top_p_features:
+            lines.append(f"\n### 高弹性 vs 普通信号特征对比")
+            lines.append("| 特征名 | 高弹性均值 | 普通均值 | 差异 |")
+            lines.append("|--------|------------|----------|------|")
+            for fname in top_p_features:
+                high_vals = [r.get(fname, 0) or 0 for r in high_records]
+                low_vals = [r.get(fname, 0) or 0 for r in low_records]
+                high_mean = np.mean(high_vals) if high_vals else 0
+                low_mean = np.mean(low_vals) if low_vals else 0
+                diff = high_mean - low_mean
+                direction = "↑高弹性更高" if diff > 0 else "↓普通更高"
+                lines.append(f"| `{fname}` | {high_mean:.3f} | {low_mean:.3f} | {diff:+.3f} {direction} |")
 
     # ── 结论 ──
     lines.append(f"\n---\n## 四、结论摘要")
     top3 = [f for f, _ in importance[:3]]
-    lines.append(f"- 最关键的3个特征: `{'` / `'.join(top3)}`")
+    lines.append(f"- 短线达标模型最关键的3个特征: `{'` / `'.join(top3)}`")
     overall_rate = sum(r.get('reached_target', 0) for r in labeled) / len(labeled)
-    lines.append(f"- 整体达标率: {overall_rate:.1%}（基准线，ML预测高于此值才有参考意义）")
-    lines.append(f"- 测试集准确率 {test_acc:.2%}，{'模型有效' if test_acc > overall_rate + 0.05 else '模型效果有限，继续积累样本'}")
+    potential_rate = sum(1 for r in labeled if float(r.get('max_gain_pct') or 0) >= POTENTIAL_GAIN_THRESHOLD_PCT) / len(labeled)
+    lines.append(f"- 短线整体达标率: {overall_rate:.1%}（短线确定性基准线）")
+    lines.append(f"- 高弹性整体命中率: {potential_rate:.1%}（潜力模型基准线）")
+    lines.append(f"- 使用方式：优先选择 `短线达标概率高 + 潜力概率高`；若短线一般但潜力高，可降低仓位观察，等待分类模型或技术信号二次确认。")
+    lines.append(f"- 当前限制：尚未接入市值、估值、财务成长、ROE、现金流、研发和机构持仓，因此该模型是“十倍股早期线索模型”，不是完整基本面十倍股模型。")
 
     with open(report_file, 'w', encoding='utf-8') as f:
         f.write('\n'.join(lines))
@@ -892,24 +980,25 @@ def predict(record: Dict) -> Optional[float]:
         return None
 
 
-def predict_gain(record: Dict) -> Optional[float]:
+def predict_potential(record: Dict) -> Optional[float]:
     """
-    用回归模型预测该信号5个交易日内的最大涨幅%。
-    模型不存在或预测失败返回 None。
+    用早期潜力模型预测该信号的高弹性爆发概率。
+    当前含义：未来 OUTCOME_DAYS 个交易日内最大涨幅 >= POTENTIAL_GAIN_THRESHOLD_PCT 的概率。
+    这是十倍/百倍早期线索模型，用于辅助短线分类模型，不直接等同真实十倍/百倍概率。
     """
-    if not os.path.exists(REGRESSOR_FILE):
+    if not os.path.exists(POTENTIAL_MODEL_FILE):
         return None
     try:
         import joblib
         import numpy as np
-        bundle = joblib.load(REGRESSOR_FILE)
+        bundle = joblib.load(POTENTIAL_MODEL_FILE)
         model         = bundle['model']
         feature_names = bundle['feature_names']
         X = np.array([[record.get(f, 0) or 0 for f in feature_names]], dtype=float)
-        gain = model.predict(X)[0]
-        return round(float(gain), 1)
+        prob = model.predict_proba(X)[0][1]
+        return round(float(prob) * 100, 1)
     except Exception as e:
-        logger.warning(f"ML涨幅预测失败: {e}")
+        logger.warning(f"ML潜力预测失败: {e}")
         return None
 
 
@@ -936,8 +1025,8 @@ def record_and_predict(
     save: bool = True,
 ) -> Dict:
     """
-    记录信号 + 立即预测达标概率和预测涨幅，一步完成。
-    返回 {'prob': 达标概率(0-100), 'gain': 预测涨幅%}，
+    记录信号 + 立即预测短线达标概率和早期潜力概率，一步完成。
+    返回 {'prob': 达标概率(0-100), 'potential': 高弹性潜力概率(0-100)}，
     模型不存在或失败时对应值为 None。
 
     参数:
@@ -962,12 +1051,12 @@ def record_and_predict(
                     analysis=analysis,
                 )
             prob = predict(record) if record else None
-            gain = predict_gain(record) if record else None
+            potential = predict_potential(record) if record else None
 
             # 将ML预测结果回写到记录中（仅供查阅，不参与训练）
             if save and record and isinstance(record, dict):
                 record['ml_predict_prob'] = prob
-                record['ml_predict_gain'] = gain
+                record['ml_predict_potential'] = potential
                 record['ml_top3_features'] = _get_model_top3()
                 data = _load_data()
                 for r in reversed(data):
@@ -976,19 +1065,21 @@ def record_and_predict(
                         r.get('period') == record.get('period') and
                         r.get('signal_type') == record.get('signal_type')):
                         r['ml_predict_prob'] = prob
-                        r['ml_predict_gain'] = gain
+                        r['ml_predict_potential'] = potential
+                        # 清理旧回归模型字段，避免后续报告继续误用
+                        r.pop('ml_predict_gain', None)
                         r['ml_top3_features'] = record['ml_top3_features']
                         break
                 _save_data(data)
 
-            return {'prob': prob, 'gain': gain}
+            return {'prob': prob, 'potential': potential}
         except Exception as e:
             import traceback
             logger.error(f"ML记录/预测失败 {code} (第{attempt}次): {e}\n{traceback.format_exc()}")
             if attempt < 3:
                 import time
                 time.sleep(1)
-    return {'prob': None, 'gain': None}
+    return {'prob': None, 'potential': None}
 
 
 # ==================== 统计 ====================
@@ -1008,4 +1099,5 @@ def get_stats() -> Dict:
         'accuracy':     round(acc, 4),
         'by_period':    by_period,
         'model_exists': os.path.exists(MODEL_FILE),
+        'potential_model_exists': os.path.exists(POTENTIAL_MODEL_FILE),
     }

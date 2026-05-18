@@ -1462,14 +1462,14 @@ def test_single_stock(period: str, period_name: str):
                 save=_is_ci(),  # 本地仅预测不记录，CI环境才写入
             )
             ml_prob = ml_result.get('prob')
-            ml_gain = ml_result.get('gain')
+            ml_potential = ml_result.get('potential')
             print(f"\n{'=' * 60}")
-            if ml_prob is not None or ml_gain is not None:
+            if ml_prob is not None or ml_potential is not None:
                 parts = []
                 if ml_prob is not None:
                     parts.append(f"达标概率: {ml_prob}%")
-                if ml_gain is not None:
-                    parts.append(f"预测涨幅: {ml_gain:+.1f}%")
+                if ml_potential is not None:
+                    parts.append(f"潜力概率: {ml_potential}%")
                 print(f"  ML预测  {'  '.join(parts)}")
             else:
                 print(f"  ML: 模型尚未训练（样本不足50条）")
@@ -1550,13 +1550,13 @@ def main():
                         save=_is_ci(),  # 本地仅预测不记录，CI环境才写入
                     )
                     ml_prob = ml_result.get('prob')
-                    ml_gain = ml_result.get('gain')
-                    if ml_prob is not None or ml_gain is not None:
+                    ml_potential = ml_result.get('potential')
+                    if ml_prob is not None or ml_potential is not None:
                         parts = []
                         if ml_prob is not None:
                             parts.append(f"达标{ml_prob}%")
-                        if ml_gain is not None:
-                            parts.append(f"涨幅{ml_gain:+.1f}%")
+                        if ml_potential is not None:
+                            parts.append(f"潜力{ml_potential}%")
                         print(f"  ML预测: {'  '.join(parts)}  [{period_name}][{signal_type}]")
                     else:
                         print(f"  ML: 模型尚未训练（样本不足50条）")

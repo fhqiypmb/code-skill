@@ -1069,9 +1069,9 @@ def main() -> None:
                     save=False,  # 本地仅预测不记录
                 )
                 prob = ml_result.get('prob')
-                gain = ml_result.get('gain')
-                if prob is not None or gain is not None:
-                    ml_results.append((code, name, prob, gain))
+                potential = ml_result.get('potential')
+                if prob is not None or potential is not None:
+                    ml_results.append((code, name, prob, potential))
             except Exception as _e:
                 print(f"  ML预测失败 {code}: {_e}")
 
@@ -1079,12 +1079,12 @@ def main() -> None:
             print(f"\n{'=' * 62}")
             print(f"  ML 预测")
             print(f"  {'─' * 56}")
-            for code, name, prob, gain in ml_results:
+            for code, name, prob, potential in ml_results:
                 parts = []
                 if prob is not None:
                     parts.append(f"达标概率: {prob}%")
-                if gain is not None:
-                    parts.append(f"预测涨幅: {gain:+.1f}%")
+                if potential is not None:
+                    parts.append(f"潜力概率: {potential}%")
                 print(f"    {code} {name:<8}  {'  '.join(parts)}")
             print(f"{'=' * 62}")
 

@@ -31,7 +31,8 @@ def main():
     print(f"  未标记:   {stats['unlabeled']}")
     print(f"  达标准确率: {stats['accuracy']:.2%}")
     print(f"  按周期:   {stats['by_period']}")
-    print(f"  模型文件: {'存在' if stats['model_exists'] else '不存在'}")
+    print(f"  短线模型: {'存在' if stats['model_exists'] else '不存在'}")
+    print(f"  潜力模型: {'存在' if stats.get('potential_model_exists') else '不存在'}")
 
     # 2. 回填实际结果
     print(f"\n【回填实际结果（信号发出 {sl.OUTCOME_DAYS} 天后）】")
