@@ -376,6 +376,53 @@ _SIGNAL_TYPE_ICONS = {
 }
 
 
+def _calc_rule_match(period_name: str, details: dict, analysis: dict) -> dict:
+    """计算V2改良规则匹配度，用于钉钉展示。"""
+    analysis = analysis or {}
+    details = details or {}
+    capital = analysis.get('capital', {}) or {}
+    sr = analysis.get('success_rate', {}) or {}
+    quote = analysis.get('quote', {}) or {}
+
+    close = details.get('close') or quote.get('price') or 0
+    main_in = capital.get('main_net_in', 0) or 0
+    flow = capital.get('flow_ratio', 0) or 0
+    big_in = capital.get('big_net_in', 0) or 0
+    momentum = sr.get('dim_momentum', 0) or 0
+    change_pct = quote.get('change_pct') or details.get('change_pct') or 0
+
+    checks = [
+        close >= 10,
+        main_in >= 2000,
+        1 <= flow <= 12,
+        momentum >= 95,
+        change_pct >= 3,
+        big_in < 4000,
+        period_name == '日线',
+    ]
+    matched = sum(1 for x in checks if x)
+    total = len(checks)
+    pct = round(matched / total * 100) if total else 0
+    return {
+        'matched': matched,
+        'total': total,
+        'pct': pct,
+        'is_full': matched == total,
+        'momentum': momentum,
+        'main_in': main_in,
+        'flow': flow,
+        'big_in': big_in,
+    }
+
+
+def _format_rule_text(rule: dict) -> str:
+    """格式化规则匹配度，满分时高亮。"""
+    text = f"规则{rule.get('pct', 0)}%"
+    if rule.get('is_full'):
+        return f'<font color="#FF0000">{text}【满分】</font>'
+    return text
+
+
 # ==================== 基本面分析辅助 ====================
 def _run_stock_analysis(code: str, name: str, signal_type: str) -> dict:
     """对单只股票运行基本面分析，失败返回空dict"""
@@ -440,9 +487,14 @@ def _format_analysis_for_dingtalk(analysis: dict, details: dict = None) -> str:
     if capital:
         main_in = capital.get('main_net_in', 0)
         flow    = capital.get('flow_ratio', 0)
+        big_in  = capital.get('big_net_in', 0)
         cap_parts.append(
             f"净买入 +{main_in:.0f}万({flow:+.1f}%)" if main_in > 0
             else f"净卖出 {main_in:.0f}万({flow:+.1f}%)"
+        )
+        cap_parts.append(
+            f"大单 +{big_in:.0f}万" if big_in > 0
+            else f"大单 {big_in:.0f}万"
         )
     if mp:
         cap_parts.append(f"量比 {mp.get('vol_ratio', 1):.2f}x")
@@ -556,10 +608,12 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             if ml_prob is not None or ml_potential is not None:
                 ml_parts = []
                 if ml_prob is not None:
-                    ml_parts.append(f"达标{ml_prob}%")
+                    ml_parts.append(f"🤖 **ML达标**{ml_prob}%")
                 if ml_potential is not None:
-                    ml_parts.append(f"潜力{ml_potential}%")
-                content += f"\n\n🤖 **ML预测** {'  '.join(ml_parts)}"
+                    ml_parts.append(f"🌱 **潜力**{ml_potential}%")
+                rule = _calc_rule_match(period_name, details, analysis)
+                ml_parts.append(f"🎯 **{_format_rule_text(rule)}**")
+                content += "\n\n" + "  ".join(ml_parts)
             send_dingtalk(webhook, secret, title, content)
             pushed_count[0] += 1
 
@@ -650,7 +704,7 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
                 f" ¥{d.get('close', 0):.2f}  {verdict_html}"
             )
 
-            # 第2行：成功率 + 目标/止损 + 行业 + RS + ML概率（紧凑一行）
+            # 第2行：成功率 + 目标/止损 + 行业 + RS（保留原有基础信息）
             row2_parts = []
             if sr:
                 score = sr.get('score', 0)
@@ -665,14 +719,24 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             if mp:
                 rs = mp.get('relative_strength', 0)
                 row2_parts.append(f"RS{rs:+.1f}%")
+            if row2_parts:
+                lines.append("  ↳ " + "  ".join(row2_parts))
+
+            # 第3行：动能 + 主力资金 + 大单 + ML达标/潜力 + 规则匹配度
+            rule = _calc_rule_match(period, d, analysis)
+            row3_parts = [
+                f"动能{rule['momentum']:.0f}",
+                f"主力{rule['main_in']:+.0f}万({rule['flow']:+.1f}%)",
+                f"大单{rule['big_in']:+.0f}万",
+            ]
             ml_prob = s.get('ml_prob')
             ml_potential = s.get('ml_potential')
             if ml_prob is not None:
-                row2_parts.append(f"🤖达标{ml_prob}%")
+                row3_parts.append(f"🤖达标{ml_prob}%")
             if ml_potential is not None:
-                row2_parts.append(f"🌱潜力{ml_potential}%")
-            if row2_parts:
-                lines.append("  ↳ " + "  ".join(row2_parts))
+                row3_parts.append(f"🌱潜力{ml_potential}%")
+            row3_parts.append(f"🎯{_format_rule_text(rule)}")
+            lines.append("  ↳ " + "  ".join(row3_parts))
 
     lines.append(f"\n共 {len(all_signals)} 条信号")
     return "\n\n".join(lines)

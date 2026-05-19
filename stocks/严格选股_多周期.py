@@ -1379,6 +1379,35 @@ def _lookup_stock_name(code: str) -> str:
     return code
 
 
+def _format_local_rule_text(period_name: str, details: dict, analysis: dict) -> str:
+    """格式化本地ML预测中的V2改良规则匹配度。"""
+    details = details or {}
+    analysis = analysis or {}
+    quote = analysis.get('quote', {}) or {}
+    capital = analysis.get('capital', {}) or {}
+    sr = analysis.get('success_rate', {}) or {}
+
+    close = details.get('close') or quote.get('price') or 0
+    main_in = capital.get('main_net_in', 0) or 0
+    flow = capital.get('flow_ratio', 0) or 0
+    big_in = capital.get('big_net_in', 0) or 0
+    momentum = sr.get('dim_momentum', 0) or 0
+    change_pct = quote.get('change_pct') or details.get('change_pct') or 0
+
+    checks = [
+        close >= 10,
+        main_in >= 2000,
+        1 <= flow <= 12,
+        momentum >= 95,
+        change_pct >= 3,
+        big_in < 4000,
+        period_name == '日线',
+    ]
+    matched = sum(1 for x in checks if x)
+    pct = round(matched / len(checks) * 100) if checks else 0
+    return f"规则:{pct}%" + ("【满分】" if matched == len(checks) else "")
+
+
 def test_single_stock(period: str, period_name: str):
     """单独测试一只股票，显示详细分析 + 筛选摘要表格"""
     while True:
@@ -1470,6 +1499,7 @@ def test_single_stock(period: str, period_name: str):
                     parts.append(f"达标概率: {ml_prob}%")
                 if ml_potential is not None:
                     parts.append(f"潜力概率: {ml_potential}%")
+                parts.append(_format_local_rule_text(period_name, details, analysis))
                 print(f"  ML预测  {'  '.join(parts)}")
             else:
                 print(f"  ML: 模型尚未训练（样本不足50条）")
@@ -1557,6 +1587,7 @@ def main():
                             parts.append(f"达标{ml_prob}%")
                         if ml_potential is not None:
                             parts.append(f"潜力{ml_potential}%")
+                        parts.append(_format_local_rule_text(period_name, details, analysis))
                         print(f"  ML预测: {'  '.join(parts)}  [{period_name}][{signal_type}]")
                     else:
                         print(f"  ML: 模型尚未训练（样本不足50条）")

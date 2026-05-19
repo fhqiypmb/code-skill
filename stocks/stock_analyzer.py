@@ -932,11 +932,13 @@ def format_analysis_report(result: AnalysisResult) -> str:
     if capital:
         main_in = capital.get('main_net_in', 0)
         flow    = capital.get('flow_ratio', 0)
+        big_in  = capital.get('big_net_in', 0)
         dir_tag = f'今日主力净买入 +{main_in:.0f}万' if main_in > 0 else f'今日主力净卖出 {main_in:.0f}万'
         flow_tag = f'  占成交额 {flow:+.2f}%'
+        big_tag = f'  大单净流入 {big_in:+.0f}万'
     else:
-        dir_tag, flow_tag = '资金数据获取失败', ''
-    lines.append(f"  【主力资金】{dir_tag}{flow_tag}")
+        dir_tag, flow_tag, big_tag = '资金数据获取失败', '', ''
+    lines.append(f"  【主力资金】{dir_tag}{flow_tag}{big_tag}")
 
     # 行业 & 概念
     lines.append('')
@@ -1071,7 +1073,7 @@ def main() -> None:
                 prob = ml_result.get('prob')
                 potential = ml_result.get('potential')
                 if prob is not None or potential is not None:
-                    ml_results.append((code, name, prob, potential))
+                    ml_results.append((code, name, prob, potential, r))
             except Exception as _e:
                 print(f"  ML预测失败 {code}: {_e}")
 
@@ -1079,12 +1081,35 @@ def main() -> None:
             print(f"\n{'=' * 62}")
             print(f"  ML 预测")
             print(f"  {'─' * 56}")
-            for code, name, prob, potential in ml_results:
+            for code, name, prob, potential, r in ml_results:
                 parts = []
                 if prob is not None:
                     parts.append(f"达标概率: {prob}%")
                 if potential is not None:
                     parts.append(f"潜力概率: {potential}%")
+
+                quote = r.get('quote', {}) or {}
+                capital = r.get('capital', {}) or {}
+                sr = r.get('success_rate', {}) or {}
+                price = quote.get('price', 0)
+                change_pct = quote.get('change_pct', 0)
+                main_in = capital.get('main_net_in', 0)
+                flow = capital.get('flow_ratio', 0)
+                big_in = capital.get('big_net_in', 0)
+                momentum = sr.get('dim_momentum', 0)
+                checks = [
+                    price >= 10,
+                    main_in >= 2000,
+                    1 <= flow <= 12,
+                    momentum >= 95,
+                    change_pct >= 3,
+                    big_in < 4000,
+                ]
+                matched = sum(1 for x in checks if x)
+                rule_pct = round(matched / len(checks) * 100) if checks else 0
+                rule_text = f"规则: {rule_pct}%" + ("【满分】" if matched == len(checks) else "")
+                parts.append(rule_text)
+
                 print(f"    {code} {name:<8}  {'  '.join(parts)}")
             print(f"{'=' * 62}")
 
