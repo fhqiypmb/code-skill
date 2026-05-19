@@ -4,7 +4,7 @@
 从 shadow_data.json 中筛选本周已过交易日及前N周交易日 ml_predict_prob >= 阈值的股票，
 生成美观的 Markdown 报告。
 
-输出字段：股票名称、股票代码、信号类型、周期、信号价格、资金净流入(流入/流出)、动能、最高价、ML达标概率、ML潜力概率
+输出字段：股票名称、股票代码、信号类型、周期、信号价格、资金净流入(流入/流出)、大单净流入、动能、规则匹配、最高价、ML达标概率、ML潜力概率
 
 用法:
     python weekly_ml_report.py                  # 默认阈值 40，覆盖已有报告，默认近1周
@@ -229,6 +229,49 @@ def _get_capital_net_value(r: Dict) -> float:
     return float(net_in)
 
 
+def _get_big_order_flow(r: Dict) -> str:
+    """大单净流入，单位万元。"""
+    val = r.get("an_capital_big_net_in")
+    if val is None or val == "":
+        return "-"
+    val = float(val)
+    icon = E_RED if val > 0 else (E_GREEN if val < 0 else E_WHITE)
+    sign = "+" if val > 0 else ""
+    if abs(val) >= 10000:
+        return f"{icon}{sign}{val/10000:.2f}亿"
+    return f"{icon}{sign}{val:.0f}万"
+
+
+def _get_rule_score(r: Dict) -> str:
+    """V2改良规则匹配百分比：7条，与钉钉汇总一致。"""
+    close = r.get("sc_close") or r.get("close") or 0
+    main_in = r.get("an_capital_main_net_in") or 0
+    flow = r.get("an_capital_flow_ratio") or 0
+    momentum = r.get("an_success_rate_dim_momentum") or 0
+    change_pct = r.get("an_quote_change_pct") or 0
+    big_in = r.get("an_capital_big_net_in") or 0
+    period = r.get("period", "")
+
+    checks = [
+        float(close) >= 10,
+        float(main_in) >= 2000,
+        1 <= float(flow) <= 12,
+        float(momentum) >= 95,
+        float(change_pct) >= 3,
+        float(big_in) < 4000,
+        period == "日线",
+    ]
+    matched = sum(1 for x in checks if x)
+    pct = round(matched / len(checks) * 100) if checks else 0
+    if matched == len(checks):
+        return f"{E_FIRE} **{pct}%【满分】**"
+    if pct >= 86:
+        return f"{E_RED} **{pct}%**"
+    if pct >= 71:
+        return f"{E_YELLOW} {pct}%"
+    return f"{E_WHITE} {pct}%"
+
+
 def _get_momentum(r: Dict) -> str:
     """动能评分"""
     val = r.get("an_success_rate_dim_momentum")
@@ -303,8 +346,8 @@ def _weekday_cn(date_str: str) -> str:
 def _render_table(records: List[Dict]) -> str:
     """渲染单日详情表格"""
     lines = []
-    lines.append("| # | 代码 | 名称 | 信号类型 | 周期 | 信号价格 | 资金净流入 | 动能 | 回填最高价 | ML达标概率 | ML潜力概率 |")
-    lines.append("|:---:|:----:|:----:|:-------:|:---:|:-------:|:---------:|:---:|:---------:|:---------:|:---------:|")
+    lines.append("| # | 代码 | 名称 | 信号类型 | 周期 | 信号价格 | 资金净流入 | 大单 | 动能 | 回填最高价 | ML达标概率 | ML潜力概率 | 规则 |")
+    lines.append("|:---:|:----:|:----:|:-------:|:---:|:-------:|:---------:|:----:|:---:|:---------:|:---------:|:---------:|:---:|")
     for i, r in enumerate(records, 1):
         code = r.get("code", "")
         name = r.get("name", "")
@@ -312,14 +355,16 @@ def _render_table(records: List[Dict]) -> str:
         period = r.get("period", "")
         signal_price = _get_signal_price(r)
         capital_flow = _get_capital_flow(r)
+        big_flow = _get_big_order_flow(r)
         momentum = _get_momentum(r)
+        rule_score = _get_rule_score(r)
         high = _get_high(r)
         prob = r.get("ml_predict_prob", 0)
         prob_str = _get_prob_str(prob)
         potential_str = _get_predict_potential(r)
         lines.append(
             f"| {i} | {code} | {name} | {signal_type} | {period} "
-            f"| {signal_price} | {capital_flow} | {momentum} | {high} | {prob_str} | {potential_str} |"
+            f"| {signal_price} | {capital_flow} | {big_flow} | {momentum} | {high} | {prob_str} | {potential_str} | {rule_score} |"
         )
     return "\n".join(lines)
 
@@ -437,6 +482,17 @@ def generate_report(
     lines.append(f"| {E_RED} | >= 60 |")
     lines.append(f"| {E_YELLOW} | >= 40 |")
     lines.append(f"| {E_WHITE} | < 40 |")
+    lines.append("")
+    lines.append("**规则匹配**")
+    lines.append("")
+    lines.append("| 标记 | 含义 |")
+    lines.append("|:----:|:----:|")
+    lines.append(f"| {E_FIRE} | 7/7，规则100%【满分】 |")
+    lines.append(f"| {E_RED} | >= 86% |")
+    lines.append(f"| {E_YELLOW} | >= 71% |")
+    lines.append(f"| {E_WHITE} | < 71% |")
+    lines.append("")
+    lines.append("规则包含：股价>=10、主力>=2000万、占比1~12%、动能>=95、涨幅>=3%、大单<4000万、日线。")
     lines.append("")
     lines.append("**ML预测涨幅**")
     lines.append("")
