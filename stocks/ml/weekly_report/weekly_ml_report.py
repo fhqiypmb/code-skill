@@ -22,6 +22,10 @@ from typing import List, Dict, Set
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _ML_DIR = os.path.dirname(_SCRIPT_DIR)          # stocks/ml/
 _STOCKS_DIR = os.path.dirname(_ML_DIR)           # stocks/
+if _STOCKS_DIR not in sys.path:
+    sys.path.insert(0, _STOCKS_DIR)
+
+import stock_analyzer
 
 DATA_FILE = os.path.join(_ML_DIR, "shadow_data.json")
 HOLIDAYS_FILE = os.path.join(_STOCKS_DIR, "stock_monitor", "holidays.json")
@@ -243,27 +247,10 @@ def _get_big_order_flow(r: Dict) -> str:
 
 
 def _get_rule_score(r: Dict) -> str:
-    """V2改良规则匹配百分比：7条，与钉钉汇总一致。"""
-    close = r.get("sc_close") or r.get("close") or 0
-    main_in = r.get("an_capital_main_net_in") or 0
-    flow = r.get("an_capital_flow_ratio") or 0
-    momentum = r.get("an_success_rate_dim_momentum") or 0
-    change_pct = r.get("an_quote_change_pct") or 0
-    big_in = r.get("an_capital_big_net_in") or 0
-    period = r.get("period", "")
-
-    checks = [
-        float(close) >= 10,
-        float(main_in) >= 2000,
-        1 <= float(flow) <= 12,
-        float(momentum) >= 95,
-        float(change_pct) >= 3,
-        10 <= float(big_in) < 4000,
-        period == "日线",
-    ]
-    matched = sum(1 for x in checks if x)
-    pct = round(matched / len(checks) * 100) if checks else 0
-    if matched == len(checks):
+    """V2改良规则匹配百分比：10条，与钉钉汇总一致。"""
+    rule = stock_analyzer.calc_v2_rule_match(record=r)
+    pct = rule['pct']
+    if rule.get('is_full'):
         return f"{E_FIRE} **{pct}%【满分】**"
     if pct >= 86:
         return f"{E_RED} **{pct}%**"

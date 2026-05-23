@@ -378,41 +378,11 @@ _SIGNAL_TYPE_ICONS = {
 
 def _calc_rule_match(period_name: str, details: dict, analysis: dict) -> dict:
     """计算V2改良规则匹配度，用于钉钉展示。"""
-    analysis = analysis or {}
-    details = details or {}
-    capital = analysis.get('capital', {}) or {}
-    sr = analysis.get('success_rate', {}) or {}
-    quote = analysis.get('quote', {}) or {}
-
-    close = details.get('close') or quote.get('price') or 0
-    main_in = capital.get('main_net_in', 0) or 0
-    flow = capital.get('flow_ratio', 0) or 0
-    big_in = capital.get('big_net_in', 0) or 0
-    momentum = sr.get('dim_momentum', 0) or 0
-    change_pct = quote.get('change_pct') or details.get('change_pct') or 0
-
-    checks = [
-        close >= 10,
-        main_in >= 2000,
-        1 <= flow <= 12,
-        momentum >= 95,
-        change_pct >= 3,
-        10 <= big_in < 4000,
-        period_name == '日线',
-    ]
-    matched = sum(1 for x in checks if x)
-    total = len(checks)
-    pct = round(matched / total * 100) if total else 0
-    return {
-        'matched': matched,
-        'total': total,
-        'pct': pct,
-        'is_full': matched == total,
-        'momentum': momentum,
-        'main_in': main_in,
-        'flow': flow,
-        'big_in': big_in,
-    }
+    return stock_analyzer.calc_v2_rule_match(
+        period_name=period_name,
+        details=details,
+        analysis=analysis,
+    )
 
 
 def _format_rule_text(rule: dict) -> str:

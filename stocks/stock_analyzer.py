@@ -93,6 +93,87 @@ class AnalysisResult(TypedDict):
     signal_type: str
 
 
+# ==================== V2规则匹配（全项目统一） ====================
+
+def _to_float(value, default: float = 0.0) -> float:
+    """安全转 float，用于规则匹配。"""
+    try:
+        if value is None or value == '':
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def calc_v2_rule_match(period_name: str = '', details: Dict = None,
+                       analysis: Dict = None, record: Dict = None) -> Dict:
+    """计算V2改良规则匹配度（10条），供监控、本地选股、周报统一使用。"""
+    details = details or {}
+    analysis = analysis or {}
+    record = record or {}
+
+    if record:
+        close = _to_float(record.get('sc_close') or record.get('close'))
+        main_in = _to_float(record.get('an_capital_main_net_in'))
+        flow = _to_float(record.get('an_capital_flow_ratio'))
+        big_in = _to_float(record.get('an_capital_big_net_in'))
+        momentum = _to_float(record.get('an_success_rate_dim_momentum'))
+        change_pct = _to_float(record.get('an_quote_change_pct'))
+        vol_ratio = _to_float(record.get('an_market_pos_vol_ratio'))
+        expected_gain = _to_float(record.get('an_technical_expected_gain_pct'))
+        reach_prob = _to_float(record.get('an_success_rate_dim_reach_prob'))
+        period = record.get('period', period_name)
+    else:
+        quote = analysis.get('quote', {}) or {}
+        capital = analysis.get('capital', {}) or {}
+        sr = analysis.get('success_rate', {}) or {}
+        mp = analysis.get('market_pos', {}) or {}
+        tech = analysis.get('technical', {}) or {}
+
+        close = _to_float(details.get('close') or quote.get('price'))
+        main_in = _to_float(capital.get('main_net_in'))
+        flow = _to_float(capital.get('flow_ratio'))
+        big_in = _to_float(capital.get('big_net_in'))
+        momentum = _to_float(sr.get('dim_momentum'))
+        change_pct = _to_float(quote.get('change_pct') or details.get('change_pct'))
+        vol_ratio = _to_float(mp.get('vol_ratio'))
+        expected_gain = _to_float(tech.get('expected_gain_pct'))
+        reach_prob = _to_float(sr.get('dim_reach_prob'))
+        period = period_name
+
+    checks = [
+        close >= 10,
+        main_in >= 2000,
+        3 <= flow <= 12,
+        momentum >= 95,
+        change_pct >= 3,
+        10 <= big_in < 4000,
+        period == '日线',
+        vol_ratio >= 1.5,
+        expected_gain >= 15,
+        reach_prob >= 70,
+    ]
+    matched = sum(1 for x in checks if x)
+    total = len(checks)
+    pct = round(matched / total * 100) if total else 0
+    return {
+        'matched': matched,
+        'total': total,
+        'pct': pct,
+        'is_full': matched == total,
+        'close': close,
+        'main_in': main_in,
+        'flow': flow,
+        'big_in': big_in,
+        'momentum': momentum,
+        'change_pct': change_pct,
+        'vol_ratio': vol_ratio,
+        'expected_gain': expected_gain,
+        'reach_prob': reach_prob,
+        'period': period,
+    }
+
+
 # ==================== 0. 标准 EMA 计算 ====================
 
 def _standard_ema(data: List[float], period: int) -> List[float]:
@@ -1089,25 +1170,12 @@ def main() -> None:
                     parts.append(f"潜力概率: {potential}%")
 
                 quote = r.get('quote', {}) or {}
-                capital = r.get('capital', {}) or {}
-                sr = r.get('success_rate', {}) or {}
-                price = quote.get('price', 0)
-                change_pct = quote.get('change_pct', 0)
-                main_in = capital.get('main_net_in', 0)
-                flow = capital.get('flow_ratio', 0)
-                big_in = capital.get('big_net_in', 0)
-                momentum = sr.get('dim_momentum', 0)
-                checks = [
-                    price >= 10,
-                    main_in >= 2000,
-                    1 <= flow <= 12,
-                    momentum >= 95,
-                    change_pct >= 3,
-                    10 <= big_in < 4000,
-                ]
-                matched = sum(1 for x in checks if x)
-                rule_pct = round(matched / len(checks) * 100) if checks else 0
-                rule_text = f"规则: {rule_pct}%" + ("【满分】" if matched == len(checks) else "")
+                rule = calc_v2_rule_match(
+                    period_name='日线',
+                    details={'close': quote.get('price', 0)},
+                    analysis=r,
+                )
+                rule_text = f"规则: {rule['pct']}%" + ("【满分】" if rule.get('is_full') else "")
                 parts.append(rule_text)
 
                 print(f"    {code} {name:<8}  {'  '.join(parts)}")
