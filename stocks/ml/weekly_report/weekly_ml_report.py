@@ -246,6 +246,33 @@ def _get_big_order_flow(r: Dict) -> str:
     return f"{icon}{sign}{val:.0f}万"
 
 
+def _format_amount_wan(val: float) -> str:
+    """万元金额紧凑格式，不带图标。"""
+    sign = "+" if val > 0 else ""
+    if abs(val) >= 10000:
+        return f"{sign}{val/10000:.2f}亿"
+    return f"{sign}{val:.0f}万"
+
+
+def _get_capital_flow_plain(r: Dict) -> str:
+    """资金净流入金额 + 占比，详情表用紧凑无图标版。"""
+    net_in = r.get("an_capital_main_net_in")
+    if net_in is None or net_in == "":
+        return "-"
+    net_in = float(net_in)
+    ratio = r.get("an_capital_flow_ratio")
+    ratio_str = "" if ratio is None or ratio == "" else f"({float(ratio):.1f})"
+    return f"{_format_amount_wan(net_in)}{ratio_str}"
+
+
+def _get_big_order_flow_plain(r: Dict) -> str:
+    """大单净流入，详情表用紧凑无图标版。"""
+    val = r.get("an_capital_big_net_in")
+    if val is None or val == "":
+        return "-"
+    return _format_amount_wan(float(val))
+
+
 def _get_rule_score(r: Dict) -> str:
     """V2改良规则匹配百分比：10条，与钉钉汇总一致。"""
     rule = stock_analyzer.calc_v2_rule_match(record=r)
@@ -257,6 +284,13 @@ def _get_rule_score(r: Dict) -> str:
     if pct >= 71:
         return f"{E_YELLOW} {pct}%"
     return f"{E_WHITE} {pct}%"
+
+
+def _get_rule_score_plain(r: Dict) -> str:
+    """详情表用紧凑规则百分比。"""
+    rule = stock_analyzer.calc_v2_rule_match(record=r)
+    pct = rule['pct']
+    return f"**{pct}%**" if rule.get('is_full') or pct >= 90 else f"{pct}%"
 
 
 def _get_momentum(r: Dict) -> str:
@@ -308,6 +342,83 @@ def _get_predict_potential(r: Dict) -> str:
         return f"{E_WHITE} {val:.1f}%"
 
 
+def _get_vol_ratio(r: Dict) -> str:
+    """量比。"""
+    val = r.get("an_market_pos_vol_ratio")
+    if val is None or val == "":
+        return "-"
+    val = float(val)
+    if val >= 1.5:
+        return f"<font color=\"#d32f2f\"><b>{val:.2f}x</b></font>"
+    if val >= 1.2:
+        return f"<font color=\"#f57c00\">{val:.2f}x</font>"
+    return f"{val:.2f}x"
+
+
+def _get_space(r: Dict) -> str:
+    """空间：预期涨幅。"""
+    val = r.get("an_technical_expected_gain_pct")
+    if val is None or val == "":
+        return "-"
+    val = float(val)
+    if val >= 15:
+        return f"<font color=\"#d32f2f\"><b>{val:.1f}%</b></font>"
+    if val >= 10:
+        return f"<font color=\"#f57c00\">{val:.1f}%</font>"
+    return f"{val:.1f}%"
+
+
+def _get_reach_prob(r: Dict) -> str:
+    """到达概率评分。"""
+    val = r.get("an_success_rate_dim_reach_prob")
+    if val is None or val == "":
+        return "-"
+    val = float(val)
+    if val >= 70:
+        return f"<font color=\"#d32f2f\"><b>{val:.0f}</b></font>"
+    if val >= 60:
+        return f"<font color=\"#f57c00\">{val:.0f}</font>"
+    return f"{val:.0f}"
+
+
+def _get_factor_summary(r: Dict) -> str:
+    """核心因子压缩展示：动能 / 量比 / 空间 / 到达。"""
+    momentum = r.get("an_success_rate_dim_momentum")
+    if momentum is None or momentum == "":
+        mom = "-"
+    else:
+        mom_val = float(momentum)
+        mom = f"<font color=\"#d32f2f\"><b>{mom_val:.0f}</b></font>" if mom_val >= 95 else f"{mom_val:.0f}"
+    return f"动{mom}｜量{_get_vol_ratio(r)}｜空{_get_space(r)}｜达{_get_reach_prob(r)}"
+
+
+def _get_ml_summary(r: Dict) -> str:
+    """ML达标/潜力概率压缩展示。"""
+    prob = r.get("ml_predict_prob", 0)
+    if prob is None or prob == "":
+        prob_str = "-"
+    else:
+        prob_val = float(prob)
+        if prob_val >= 60:
+            prob_str = f"<font color=\"#d32f2f\"><b>{prob_val:.1f}%</b></font>"
+        elif prob_val >= 50:
+            prob_str = f"<font color=\"#f57c00\">{prob_val:.1f}%</font>"
+        else:
+            prob_str = f"{prob_val:.1f}%"
+    potential = r.get("ml_predict_potential")
+    if potential is None or potential == "":
+        potential_str = "-"
+    else:
+        potential_val = float(potential)
+        if potential_val >= 60:
+            potential_str = f"<font color=\"#d32f2f\"><b>{potential_val:.1f}%</b></font>"
+        elif potential_val >= 50:
+            potential_str = f"<font color=\"#f57c00\">{potential_val:.1f}%</font>"
+        else:
+            potential_str = f"{potential_val:.1f}%"
+    return f"达{prob_str} / 潜{potential_str}"
+
+
 def _get_prob_str(prob: float) -> str:
     """概率等级标记"""
     if prob >= 90:
@@ -333,25 +444,26 @@ def _weekday_cn(date_str: str) -> str:
 def _render_table(records: List[Dict]) -> str:
     """渲染单日详情表格"""
     lines = []
-    lines.append("| # | 代码 | 名称 | 信号类型 | 周期 | 信号价格 | 资金净流入 | 大单 | 动能 | 回填最高价 | ML达标概率 | ML潜力概率 | 规则 |")
-    lines.append("|:---:|:----:|:----:|:-------:|:---:|:-------:|:---------:|:----:|:---:|:---------:|:---------:|:---------:|:---:|")
+    lines.append("| # | 股票 | 信号 | 价/高 | 资金 | 大单 | 因子 | ML | 规则 |")
+    lines.append("|:---:|:----|:---:|:----:|:----:|:----:|:----|:----:|:---:|")
     for i, r in enumerate(records, 1):
         code = r.get("code", "")
         name = r.get("name", "")
         signal_type = r.get("signal_type", "")
         period = r.get("period", "")
         signal_price = _get_signal_price(r)
-        capital_flow = _get_capital_flow(r)
-        big_flow = _get_big_order_flow(r)
-        momentum = _get_momentum(r)
-        rule_score = _get_rule_score(r)
         high = _get_high(r)
-        prob = r.get("ml_predict_prob", 0)
-        prob_str = _get_prob_str(prob)
-        potential_str = _get_predict_potential(r)
+        price_high = signal_price if high == "-" else f"{signal_price}/{high}"
+        capital_flow = _get_capital_flow_plain(r)
+        big_flow = _get_big_order_flow_plain(r)
+        factors = _get_factor_summary(r)
+        rule_score = _get_rule_score_plain(r)
+        ml_summary = _get_ml_summary(r)
+        stock = f"{code} {name}"
+        signal = f"{signal_type}/{period}"
         lines.append(
-            f"| {i} | {code} | {name} | {signal_type} | {period} "
-            f"| {signal_price} | {capital_flow} | {big_flow} | {momentum} | {high} | {prob_str} | {potential_str} | {rule_score} |"
+            f"| {i} | {stock} | {signal} | {price_high} | {capital_flow} "
+            f"| {big_flow} | {factors} | {ml_summary} | {rule_score} |"
         )
     return "\n".join(lines)
 
@@ -381,6 +493,27 @@ def generate_report(
     lines.append(f"> {E_TARGET} 筛选阈值：`ml_predict_prob >= {threshold}%`")
     lines.append(f"> {E_UP} 符合条件：**{total}** 只股票")
     lines.append("")
+
+    lines.append("<details>")
+    lines.append(f"<summary>{E_BOOK} 字段说明：因子与资金占比</summary>")
+    lines.append("")
+    lines.append("| 表格字段 | 中文解释 | 对应属性名 |")
+    lines.append("|:--------|:---------|:-----------|")
+    lines.append("| 资金 `+740万(3.7)` | 主力净流入金额；括号内为主力净流入强度，占成交额比例，单位% | `an_capital_main_net_in` / `an_capital_flow_ratio` |")
+    lines.append("| 大单 | 大单净流入金额，单位万元 | `an_capital_big_net_in` |")
+    lines.append("| 动 | 动能评分，越高代表趋势推动力越强 | `an_success_rate_dim_momentum` |")
+    lines.append("| 量 | 量比，当前成交量相对近20日均量的倍数 | `an_market_pos_vol_ratio` |")
+    lines.append("| 空 | 空间/预期涨幅，即当前价到系统目标价的距离 | `an_technical_expected_gain_pct` |")
+    lines.append("| 达 | 到达概率评分，衡量目标价短期可达性 | `an_success_rate_dim_reach_prob` |")
+    lines.append("| ML达 | 短线达标模型概率，预测5日内能否触达目标价 | `ml_predict_prob` |")
+    lines.append("| ML潜 | 潜力模型概率，当前表示5日内最大涨幅>=8%的概率 | `ml_predict_potential` |")
+    lines.append("| 规则 | 10条V2规则匹配百分比 | `calc_v2_rule_match()` |")
+    lines.append("")
+    lines.append("> 示例：`资金 +740万(3.7)` 表示主力净流入约740万元，主力净流入强度约为3.7%。")
+    lines.append("")
+    lines.append("</details>")
+    lines.append("")
+
     lines.append("---")
     lines.append("")
 
@@ -474,14 +607,21 @@ def generate_report(
     lines.append("")
     lines.append("| 标记 | 含义 |")
     lines.append("|:----:|:----:|")
-    lines.append(f"| {E_FIRE} | 7/7，规则100%【满分】 |")
+    lines.append(f"| {E_FIRE} | 10/10，规则100%【满分】 |")
     lines.append(f"| {E_RED} | >= 86% |")
     lines.append(f"| {E_YELLOW} | >= 71% |")
     lines.append(f"| {E_WHITE} | < 71% |")
     lines.append("")
-    lines.append("规则包含：股价>=10、主力>=2000万、占比1~12%、动能>=95、涨幅>=3%、大单10~4000万、日线。")
+    lines.append("规则包含：股价>=10、主力>=2000万、占比3~12%、动能>=95、涨幅>=3%、大单10~4000万、日线、量比>=1.5、空间>=15%、到达概率>=70。")
     lines.append("")
-    lines.append("**ML预测涨幅**")
+    lines.append("**核心因子列**")
+    lines.append("")
+    lines.append("- `动`：动能评分")
+    lines.append("- `量`：量比，粗体表示 >=1.5")
+    lines.append("- `空`：空间/预期涨幅，粗体表示 >=15%")
+    lines.append("- `达`：到达概率评分，粗体表示 >=70")
+    lines.append("")
+    lines.append("**ML概率**")
     lines.append("")
     lines.append("| 标记 | 含义 |")
     lines.append("|:----:|:----:|")
@@ -560,17 +700,12 @@ def generate_report(
         inflow_records.sort(key=_get_capital_net_value, reverse=True)
         lines.append(f"## {E_MONEY} 资金净流入 TOP")
         lines.append("")
-        lines.append("| # | 代码 | 名称 | 日期 | 资金净流入 | 信号价格 | 动能 | ML预测概率 |")
-        lines.append("|:---:|:----:|:----:|:----:|:---------:|:-------:|:---:|:---------:|")
+        lines.append("| # | 股票 | 日期 | 资金 | 因子 | ML | 规则 |")
+        lines.append("|:---:|:----|:----:|:----:|:----|:----:|:---:|")
         for i, r in enumerate(inflow_records[:10], 1):
-            cap_net = _get_capital_net_value(r)
-            if cap_net >= 10000:
-                cap_str = f"+{cap_net/10000:.2f}亿"
-            else:
-                cap_str = f"+{cap_net:.2f}万"
             lines.append(
-                f"| {i} | {r.get('code','')} | {r.get('name','')} | {r.get('date','')} "
-                f"| {cap_str} | {_get_signal_price(r)} | {_get_momentum(r)} | {_get_prob_str(r['ml_predict_prob'])} |"
+                f"| {i} | {r.get('code','')} {r.get('name','')} | {r.get('date','')} "
+                f"| {_get_capital_flow_plain(r)} | {_get_factor_summary(r)} | {_get_ml_summary(r)} | {_get_rule_score_plain(r)} |"
             )
         lines.append("")
         lines.append("---")
@@ -585,13 +720,12 @@ def generate_report(
         )
         lines.append(f"## {E_ROCKET} 动能 TOP")
         lines.append("")
-        lines.append("| # | 代码 | 名称 | 日期 | 动能 | 信号价格 | 资金净流入 | ML预测概率 |")
-        lines.append("|:---:|:----:|:----:|:----:|:---:|:-------:|:---------:|:---------:|")
+        lines.append("| # | 股票 | 日期 | 因子 | 资金 | ML | 规则 |")
+        lines.append("|:---:|:----|:----:|:----|:----:|:----:|:---:|")
         for i, r in enumerate(momentum_sorted[:10], 1):
-            mom_val = float(r.get("an_success_rate_dim_momentum") or 0)
             lines.append(
-                f"| {i} | {r.get('code','')} | {r.get('name','')} | {r.get('date','')} "
-                f"| {mom_val:.1f} | {_get_signal_price(r)} | {_get_capital_flow(r)} | {_get_prob_str(r['ml_predict_prob'])} |"
+                f"| {i} | {r.get('code','')} {r.get('name','')} | {r.get('date','')} "
+                f"| {_get_factor_summary(r)} | {_get_capital_flow_plain(r)} | {_get_ml_summary(r)} | {_get_rule_score_plain(r)} |"
             )
         lines.append("")
         lines.append("---")
