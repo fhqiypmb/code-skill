@@ -1400,7 +1400,7 @@ def _format_local_rule_text(period_name: str, details: dict, analysis: dict) -> 
         1 <= flow <= 12,
         momentum >= 95,
         change_pct >= 3,
-        big_in < 4000,
+        10 <= big_in < 4000,
         period_name == '日线',
     ]
     matched = sum(1 for x in checks if x)

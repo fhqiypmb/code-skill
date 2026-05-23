@@ -258,7 +258,7 @@ def _get_rule_score(r: Dict) -> str:
         1 <= float(flow) <= 12,
         float(momentum) >= 95,
         float(change_pct) >= 3,
-        float(big_in) < 4000,
+        10 <= float(big_in) < 4000,
         period == "日线",
     ]
     matched = sum(1 for x in checks if x)
@@ -492,7 +492,7 @@ def generate_report(
     lines.append(f"| {E_YELLOW} | >= 71% |")
     lines.append(f"| {E_WHITE} | < 71% |")
     lines.append("")
-    lines.append("规则包含：股价>=10、主力>=2000万、占比1~12%、动能>=95、涨幅>=3%、大单<4000万、日线。")
+    lines.append("规则包含：股价>=10、主力>=2000万、占比1~12%、动能>=95、涨幅>=3%、大单10~4000万、日线。")
     lines.append("")
     lines.append("**ML预测涨幅**")
     lines.append("")

@@ -1103,7 +1103,7 @@ def main() -> None:
                     1 <= flow <= 12,
                     momentum >= 95,
                     change_pct >= 3,
-                    big_in < 4000,
+                    10 <= big_in < 4000,
                 ]
                 matched = sum(1 for x in checks if x)
                 rule_pct = round(matched / len(checks) * 100) if checks else 0
