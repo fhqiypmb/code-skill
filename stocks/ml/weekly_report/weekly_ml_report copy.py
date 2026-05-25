@@ -2,7 +2,7 @@
 周度 ML 预测报告生成器
 =====================
 从 shadow_data.json 中筛选本周已过交易日及前N周交易日 ml_predict_prob >= 阈值的股票，
-同时生成 Markdown 报告 和 交互式 HTML 看板。
+生成美观的 Markdown 报告。
 
 输出字段：股票名称、股票代码、信号类型、周期、信号价格、资金净流入(流入/流出)、大单净流入、动能、规则匹配、最高价、ML达标概率、ML潜力概率
 
@@ -16,7 +16,7 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta
-from typing import List, Dict, Set, Optional
+from typing import List, Dict, Set
 
 # ─────────────────── 路径配置 ───────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +30,6 @@ import stock_analyzer
 DATA_FILE = os.path.join(_ML_DIR, "shadow_data.json")
 HOLIDAYS_FILE = os.path.join(_STOCKS_DIR, "stock_monitor", "holidays.json")
 OUTPUT_FILE = os.path.join(_SCRIPT_DIR, "weekly_ml_report.md")
-OUTPUT_HTML_FILE = os.path.join(_SCRIPT_DIR, "weekly_ml_report.html")
 
 # ─────────────────── Emoji 定义 ───────────────────
 E_FIRE      = "\U0001f525"   # 🔥
@@ -163,9 +162,11 @@ def _filter_records(
             for r in day_records
         )
         if not has_prob and day_records:
+            # 该日有数据但无 ml_predict_prob
             no_ml_data_dates.add(d)
             continue
         if not day_records:
+            # 该日无任何数据（可能尚未采集）
             no_ml_data_dates.add(d)
             continue
 
@@ -187,6 +188,7 @@ def _filter_records(
 # ─────────────────── 字段提取辅助 ───────────────────
 
 def _get_signal_price(r: Dict) -> str:
+    """出信号时的价格：优先 sc_close，其次 close"""
     val = r.get("sc_close") or r.get("close") or ""
     if val != "":
         return f"{float(val):.2f}"
@@ -194,22 +196,37 @@ def _get_signal_price(r: Dict) -> str:
 
 
 def _get_capital_flow(r: Dict) -> str:
+    """资金净流入金额 + 占比 + 流入/流出标记（简短版，用于表格）"""
     net_in = r.get("an_capital_main_net_in")
     if net_in is None or net_in == "":
         return "-"
+
     net_in = float(net_in)
-    icon = E_RED if net_in > 0 else (E_GREEN if net_in < 0 else E_WHITE)
+    if net_in > 0:
+        icon = E_RED
+    elif net_in < 0:
+        icon = E_GREEN
+    else:
+        icon = E_WHITE
+
     if abs(net_in) >= 10000:
         amount_str = f"{abs(net_in)/10000:.2f}亿"
     else:
         amount_str = f"{abs(net_in):.0f}万"
+
     sign = "+" if net_in > 0 else ("-" if net_in < 0 else "")
+
+    # 资金占比
     ratio = r.get("an_capital_flow_ratio")
-    ratio_str = "" if ratio is None or ratio == "" else f"({float(ratio):.2f})"
+    ratio_str = ""
+    if ratio is not None and ratio != "":
+        ratio_str = f"({float(ratio):.2f})"
+
     return f"{icon}{sign}{amount_str}{ratio_str}"
 
 
 def _get_capital_net_value(r: Dict) -> float:
+    """获取资金净流入原始数值，用于排序"""
     net_in = r.get("an_capital_main_net_in")
     if net_in is None or net_in == "":
         return 0
@@ -217,6 +234,7 @@ def _get_capital_net_value(r: Dict) -> float:
 
 
 def _get_big_order_flow(r: Dict) -> str:
+    """大单净流入，单位万元。"""
     val = r.get("an_capital_big_net_in")
     if val is None or val == "":
         return "-"
@@ -229,6 +247,7 @@ def _get_big_order_flow(r: Dict) -> str:
 
 
 def _format_amount_wan(val: float) -> str:
+    """万元金额紧凑格式，不带图标。"""
     sign = "+" if val > 0 else ""
     if abs(val) >= 10000:
         return f"{sign}{val/10000:.2f}亿"
@@ -236,6 +255,7 @@ def _format_amount_wan(val: float) -> str:
 
 
 def _get_capital_flow_plain(r: Dict) -> str:
+    """资金净流入金额 + 占比，详情表用紧凑无图标版。"""
     net_in = r.get("an_capital_main_net_in")
     if net_in is None or net_in == "":
         return "-"
@@ -246,6 +266,7 @@ def _get_capital_flow_plain(r: Dict) -> str:
 
 
 def _get_big_order_flow_plain(r: Dict) -> str:
+    """大单净流入，详情表用紧凑无图标版。"""
     val = r.get("an_capital_big_net_in")
     if val is None or val == "":
         return "-"
@@ -253,6 +274,7 @@ def _get_big_order_flow_plain(r: Dict) -> str:
 
 
 def _get_rule_score(r: Dict) -> str:
+    """V2改良规则匹配百分比：10条，与钉钉汇总一致。"""
     rule = stock_analyzer.calc_v2_rule_match(record=r)
     pct = rule['pct']
     if rule.get('is_full'):
@@ -265,18 +287,14 @@ def _get_rule_score(r: Dict) -> str:
 
 
 def _get_rule_score_plain(r: Dict) -> str:
+    """详情表用紧凑规则百分比。"""
     rule = stock_analyzer.calc_v2_rule_match(record=r)
     pct = rule['pct']
     return f"**{pct}%**" if rule.get('is_full') or pct >= 90 else f"{pct}%"
 
 
-def _get_rule_pct(r: Dict) -> int:
-    """返回规则匹配百分比整数，供 HTML 使用"""
-    rule = stock_analyzer.calc_v2_rule_match(record=r)
-    return rule['pct']
-
-
 def _get_momentum(r: Dict) -> str:
+    """动能评分"""
     val = r.get("an_success_rate_dim_momentum")
     if val is None or val == "":
         return "-"
@@ -292,6 +310,8 @@ def _get_momentum(r: Dict) -> str:
 
 
 def _get_high(r: Dict) -> str:
+    """回填期间最高价（信号发出后5日内最高价），未回填则显示 -
+    如果有回填最高价和信号价格，则附带上涨百分比"""
     val = r.get("max_high")
     if val is not None and val != "":
         max_h = float(val)
@@ -307,6 +327,7 @@ def _get_high(r: Dict) -> str:
 
 
 def _get_predict_potential(r: Dict) -> str:
+    """ML潜力概率：当前表示5日内最大涨幅 >= 8%的概率"""
     val = r.get("ml_predict_potential")
     if val is None or val == "":
         return "-"
@@ -322,6 +343,7 @@ def _get_predict_potential(r: Dict) -> str:
 
 
 def _get_vol_ratio(r: Dict) -> str:
+    """量比。"""
     val = r.get("an_market_pos_vol_ratio")
     if val is None or val == "":
         return "-"
@@ -334,6 +356,7 @@ def _get_vol_ratio(r: Dict) -> str:
 
 
 def _get_space(r: Dict) -> str:
+    """空间：预期涨幅。"""
     val = r.get("an_technical_expected_gain_pct")
     if val is None or val == "":
         return "-"
@@ -346,6 +369,7 @@ def _get_space(r: Dict) -> str:
 
 
 def _get_reach_prob(r: Dict) -> str:
+    """到达概率评分。"""
     val = r.get("an_success_rate_dim_reach_prob")
     if val is None or val == "":
         return "-"
@@ -358,6 +382,7 @@ def _get_reach_prob(r: Dict) -> str:
 
 
 def _get_factor_summary(r: Dict) -> str:
+    """核心因子压缩展示：动能 / 量比 / 空间 / 到达。"""
     momentum = r.get("an_success_rate_dim_momentum")
     if momentum is None or momentum == "":
         mom = "-"
@@ -368,6 +393,7 @@ def _get_factor_summary(r: Dict) -> str:
 
 
 def _get_ml_summary(r: Dict) -> str:
+    """ML达标/潜力概率压缩展示。"""
     prob = r.get("ml_predict_prob", 0)
     if prob is None or prob == "":
         prob_str = "-"
@@ -394,6 +420,7 @@ def _get_ml_summary(r: Dict) -> str:
 
 
 def _get_prob_str(prob: float) -> str:
+    """概率等级标记"""
     if prob >= 90:
         return f"{E_FIRE} **{prob:.1f}%**"
     elif prob >= 80:
@@ -407,7 +434,6 @@ def _get_prob_str(prob: float) -> str:
 # ─────────────────── Markdown 生成 ───────────────────
 
 WEEKDAY_CN = ["一", "二", "三", "四", "五", "六", "日"]
-WEEKDAY_SHORT = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 
 def _weekday_cn(date_str: str) -> str:
@@ -416,6 +442,7 @@ def _weekday_cn(date_str: str) -> str:
 
 
 def _render_table(records: List[Dict]) -> str:
+    """渲染单日详情表格"""
     lines = []
     lines.append("| # | 股票 | 信号 | 价/高 | 资金 | 大单 | 因子 | ML | 规则 |")
     lines.append("|:---:|:----|:---:|:----:|:----:|:----:|:----|:----:|:---:|")
@@ -448,6 +475,7 @@ def generate_report(
     weeks: int = 1,
     no_ml_data_dates: Set[str] = None,
 ) -> str:
+    """生成完整 Markdown 报告"""
     if no_ml_data_dates is None:
         no_ml_data_dates = set()
     today = datetime.now()
@@ -457,6 +485,7 @@ def generate_report(
 
     lines = []
 
+    # ── 标题区 ──
     lines.append(f"# {E_CHART} ML 预测概率周报")
     lines.append("")
     lines.append(f"> {E_CALENDAR} 生成时间：{today.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -484,6 +513,7 @@ def generate_report(
     lines.append("")
     lines.append("</details>")
     lines.append("")
+
     lines.append("---")
     lines.append("")
 
@@ -494,9 +524,11 @@ def generate_report(
         lines.append("")
         return "\n".join(lines)
 
+    # ── 每日概览 ──
     lines.append(f"## {E_CLIPBOARD} 每日概览")
     lines.append("")
 
+    # 只显示有符合条件数据的日期
     active_days = [d for d in trading_days if d in filtered]
     skipped_zero_days = [d for d in trading_days if d not in filtered and d not in no_ml_data_dates]
 
@@ -524,6 +556,7 @@ def generate_report(
         lines.append(f"{E_EMPTY} 所选周期内无符合条件的数据")
     lines.append("")
 
+    # 注释：无 ML 数据的日期 & 有 ML 数据但 0 条符合条件的日期
     if no_ml_data_dates:
         no_ml_str = ", ".join(f"周{_weekday_cn(d)} {d[5:]}" for d in sorted(no_ml_data_dates))
         lines.append(f"> {E_YELLOW} 以下日期无 ML 预测数据：{no_ml_str}")
@@ -535,9 +568,12 @@ def generate_report(
 
     lines.append("---")
     lines.append("")
+
+    # ── 每日详情 ──
     lines.append(f"## {E_UP} 每日详情")
     lines.append("")
 
+    # 标记说明
     lines.append("<details>")
     lines.append(f"<summary>{E_BOOK} 标记说明</summary>")
     lines.append("")
@@ -610,7 +646,7 @@ def generate_report(
         lines.append("")
 
     # ── 多日重复出现统计 ──
-    code_count: Dict[str, Dict] = {}
+    code_count = {}
     for d, records in filtered.items():
         for r in records:
             key = r.get("code", "")
@@ -624,8 +660,10 @@ def generate_report(
                 }
             code_count[key]["dates"].append(d)
             code_count[key]["probs"].append(r["ml_predict_prob"])
-            code_count[key]["capitals"].append(_get_capital_net_value(r))
-            code_count[key]["momentums"].append(float(r.get("an_success_rate_dim_momentum") or 0))
+            cap = _get_capital_net_value(r)
+            code_count[key]["capitals"].append(cap)
+            mom = float(r.get("an_success_rate_dim_momentum") or 0)
+            code_count[key]["momentums"].append(mom)
 
     multi_day = {k: v for k, v in code_count.items() if len(v["dates"]) >= 2}
     if multi_day:
@@ -652,7 +690,8 @@ def generate_report(
         lines.append("---")
         lines.append("")
 
-    all_records: List[Dict] = []
+    # ── 资金流入 TOP ──
+    all_records = []
     for d, records in filtered.items():
         all_records.extend(records)
 
@@ -672,6 +711,7 @@ def generate_report(
         lines.append("---")
         lines.append("")
 
+    # ── 动能 TOP ──
     if all_records:
         momentum_sorted = sorted(
             all_records,
@@ -691,399 +731,11 @@ def generate_report(
         lines.append("---")
         lines.append("")
 
+    # ── 页脚 ──
     lines.append(f"<sup>{E_PIN} 数据来源：`stocks/ml/shadow_data.json` | 由 `weekly_ml_report.py` 自动生成</sup>")
     lines.append("")
 
     return "\n".join(lines)
-
-
-# ─────────────────── HTML 生成 ───────────────────
-
-def _build_html_days_data(
-    filtered: Dict[str, List[Dict]],
-    trading_days: List[str],
-) -> List[Dict]:
-    """
-    将筛选后的数据转换为 HTML 看板所需的 JSON 结构。
-    同时计算哪些股票在多日重复出现，打上 rep 标记。
-    """
-    # 统计各 code 出现日期数，用于 rep 标记
-    code_dates: Dict[str, int] = {}
-    for d, records in filtered.items():
-        for r in records:
-            code = r.get("code", "")
-            code_dates[code] = code_dates.get(code, 0) + 1
-
-    days_data: List[Dict] = []
-    for d in trading_days:
-        if d not in filtered:
-            continue
-        d_obj = datetime.strptime(d, "%Y-%m-%d")
-        label = f"{WEEKDAY_SHORT[d_obj.weekday()]} {d[5:]}"
-
-        stocks: List[Dict] = []
-        for r in filtered[d]:
-            price_raw = r.get("sc_close") or r.get("close") or 0
-            price = round(float(price_raw), 2) if price_raw else 0
-
-            cap_raw = r.get("an_capital_main_net_in")
-            cap = round(float(cap_raw), 0) if cap_raw is not None and cap_raw != "" else 0
-
-            cap_r_raw = r.get("an_capital_flow_ratio")
-            cap_r = round(float(cap_r_raw), 1) if cap_r_raw is not None and cap_r_raw != "" else 0
-
-            big_raw = r.get("an_capital_big_net_in")
-            big = round(float(big_raw), 0) if big_raw is not None and big_raw != "" else 0
-
-            mom_raw = r.get("an_success_rate_dim_momentum")
-            mom = round(float(mom_raw), 1) if mom_raw is not None and mom_raw != "" else 0
-
-            vol_raw = r.get("an_market_pos_vol_ratio")
-            vol = round(float(vol_raw), 2) if vol_raw is not None and vol_raw != "" else 0
-
-            spc_raw = r.get("an_technical_expected_gain_pct")
-            spc = round(float(spc_raw), 1) if spc_raw is not None and spc_raw != "" else 0
-
-            reach_raw = r.get("an_success_rate_dim_reach_prob")
-            reach = round(float(reach_raw), 0) if reach_raw is not None and reach_raw != "" else 0
-
-            ml_raw = r.get("ml_predict_prob")
-            ml = round(float(ml_raw), 1) if ml_raw is not None and ml_raw != "" else 0
-
-            pot_raw = r.get("ml_predict_potential")
-            pot: Optional[float] = round(float(pot_raw), 1) if pot_raw is not None and pot_raw != "" else None
-
-            high_str = _get_high(r)  # 如 "15.22(+3.7%)" 或 "-"
-
-            rule_pct = _get_rule_pct(r)
-
-            stocks.append({
-                "c":    r.get("code", ""),
-                "n":    r.get("name", ""),
-                "sig":  f"{r.get('signal_type', '')}/{r.get('period', '')}",
-                "p":    price,
-                "high": high_str,
-                "cap":  int(cap),
-                "capR": cap_r,
-                "big":  int(big),
-                "mom":  mom,
-                "vol":  vol,
-                "spc":  spc,
-                "reach": int(reach),
-                "ml":   ml,
-                "pot":  pot,
-                "rule": rule_pct,
-                "rep":  code_dates.get(r.get("code", ""), 1) >= 2,
-            })
-
-        days_data.append({
-            "date":   d,
-            "label":  label,
-            "stocks": stocks,
-        })
-
-    return days_data
-
-
-def generate_html_report(
-    filtered: Dict[str, List[Dict]],
-    trading_days: List[str],
-    threshold: float,
-    weeks: int = 1,
-    no_ml_data_dates: Set[str] = None,
-) -> str:
-    """生成交互式 HTML 看板报告"""
-    if no_ml_data_dates is None:
-        no_ml_data_dates = set()
-
-    today = datetime.now()
-    total = sum(len(v) for v in filtered.values())
-    weeks_label = f"本周 + 近 {weeks} 周" if weeks > 1 else "本周 + 上周"
-
-    date_range = ""
-    if trading_days:
-        date_range = f"{trading_days[-1]} ~ {trading_days[0]}"
-
-    days_data = _build_html_days_data(filtered, trading_days)
-    days_json = json.dumps(days_data, ensure_ascii=False)
-
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ML 预测概率周报 {date_range}</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;background:#f4f4f2;color:#1a1a1a;padding:16px;min-width:360px}}
-/* ── 头部 ── */
-.header{{background:#fff;border-radius:12px;padding:16px 20px;margin-bottom:12px;border:1px solid #e4e4e0}}
-.header h1{{font-size:17px;font-weight:600}}
-.header-meta{{font-size:12px;color:#888;margin-top:4px;display:flex;flex-wrap:wrap;gap:8px}}
-.legend{{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}}
-.leg{{font-size:11px;padding:3px 9px;border-radius:10px;display:flex;align-items:center;gap:5px;border:1px solid transparent}}
-.leg-dot{{width:8px;height:8px;border-radius:50%;flex-shrink:0}}
-/* ── Tabs ── */
-.tabs{{display:flex;gap:5px;overflow-x:auto;padding:6px;background:#fff;border-radius:10px;margin-bottom:12px;border:1px solid #e4e4e0;scrollbar-width:none}}
-.tabs::-webkit-scrollbar{{display:none}}
-.tab{{padding:6px 13px;font-size:12px;border-radius:7px;border:none;background:transparent;color:#888;cursor:pointer;white-space:nowrap;transition:all .15s;font-weight:500}}
-.tab.active{{background:#111;color:#fff}}
-/* ── 工具栏 ── */
-.toolbar{{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}}
-.ctrl-label{{font-size:12px;color:#888;font-weight:500}}
-.sort-btn{{padding:5px 12px;font-size:12px;border-radius:7px;border:1px solid #ddd;background:#fff;color:#666;cursor:pointer;transition:all .15s}}
-.sort-btn.active{{border-color:#111;color:#111;font-weight:600;background:#f9f9f7}}
-/* ── 日概览 chips ── */
-.day-chips{{display:flex;gap:7px;margin-bottom:12px;flex-wrap:wrap}}
-.chip{{font-size:11px;padding:4px 10px;border-radius:8px;background:#fff;border:1px solid #e4e4e0;color:#555}}
-/* ── 卡片网格 ── */
-.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(285px,1fr));gap:10px}}
-/* ── 单张卡片 ── */
-.card{{background:#fff;border-radius:12px;padding:13px 15px;border:1px solid #e4e4e0;border-left:4px solid #ccc;transition:box-shadow .15s}}
-.card:hover{{box-shadow:0 3px 14px rgba(0,0,0,.07)}}
-.card.c-blue{{border-left-color:#2563eb}}
-.card.c-teal{{border-left-color:#059669}}
-.card.c-amber{{border-left-color:#d97706}}
-.card.c-gray{{border-left-color:#bbb}}
-/* 卡片顶部 */
-.card-top{{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:9px}}
-.stock-name{{font-size:15px;font-weight:600;color:#111;display:flex;align-items:center;gap:5px;flex-wrap:wrap}}
-.rep-tag{{font-size:9px;padding:1px 5px;border-radius:4px;background:#fef3c7;color:#92400e;border:1px solid #fbbf24;font-weight:500}}
-.stock-meta{{font-size:11px;color:#999;margin-top:2px}}
-.ml-box{{text-align:right;flex-shrink:0;margin-left:8px}}
-.ml-num{{font-size:20px;font-weight:700;line-height:1}}
-.ml-num.c-blue{{color:#1d4ed8}}
-.ml-num.c-teal{{color:#065f46}}
-.ml-num.c-amber{{color:#92400e}}
-.ml-num.c-gray{{color:#9ca3af}}
-.ml-pot{{font-size:11px;color:#aaa;margin-top:2px}}
-.ml-pot.has{{color:#b91c1c;font-weight:500}}
-/* 信号行 */
-.sig-row{{margin-bottom:9px;display:flex;gap:5px;align-items:center;flex-wrap:wrap}}
-.sig-tag{{font-size:10px;padding:2px 7px;border-radius:5px;border:1px solid #e0e0e0;background:#f7f7f5;color:#666}}
-.sig-tag.strict{{background:#f0f0ff;color:#3730a3;border-color:#c7d2fe}}
-.sig-tag.break{{background:#f0fdf4;color:#065f46;border-color:#86efac}}
-.price-tag{{font-size:10px;padding:2px 7px;border-radius:5px;background:#f5f5f3;color:#777;border:1px solid #e8e8e4}}
-.high-tag{{font-size:10px;padding:2px 7px;border-radius:5px;background:#fef9ee;color:#92400e;border:1px solid #fde68a}}
-/* 指标格 */
-.metrics{{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-bottom:9px}}
-.metric{{background:#f8f8f6;border-radius:7px;padding:6px 3px;text-align:center;border:1px solid #efefec}}
-.m-label{{font-size:9px;color:#bbb;margin-bottom:2px}}
-.m-val{{font-size:12px;font-weight:600;color:#333}}
-.m-val.hot{{color:#dc2626}}
-.m-val.warm{{color:#d97706}}
-.m-val.ok{{color:#059669}}
-.m-val.dim{{color:#bbb}}
-/* 资金行 */
-.cap-row{{display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid #f0f0ec}}
-.cap-in{{font-size:11px;font-weight:600;color:#dc2626}}
-.cap-out{{font-size:11px;font-weight:600;color:#059669}}
-.cap-flat{{font-size:11px;color:#bbb}}
-.big-txt{{font-size:11px;color:#bbb}}
-/* 规则条 */
-.rule-wrap{{display:flex;flex-direction:column;align-items:center;gap:2px}}
-.rule-bar{{width:44px;height:3px;background:#eee;border-radius:2px;overflow:hidden}}
-.rule-fill{{height:100%;border-radius:2px;background:#bbb}}
-.rule-fill.r80{{background:#2563eb}}
-.rule-fill.r60{{background:#059669}}
-.rule-fill.r40{{background:#d97706}}
-.rule-num{{font-size:10px;color:#aaa}}
-/* 空状态 */
-.empty{{text-align:center;padding:40px;color:#bbb;font-size:14px}}
-/* 响应式 */
-@media(max-width:480px){{
-  .grid{{grid-template-columns:1fr}}
-  .metrics{{grid-template-columns:repeat(5,1fr)}}
-}}
-</style>
-</head>
-<body>
-
-<div class="header">
-  <h1>📊 ML 预测概率周报</h1>
-  <div class="header-meta">
-    <span>📅 生成：{today.strftime('%Y-%m-%d %H:%M')}</span>
-    <span>📅 周期：{weeks_label}（{date_range}）</span>
-    <span>🎯 阈值：ML ≥ {threshold}%</span>
-    <span>📈 共 <strong>{total}</strong> 只</span>
-  </div>
-  <div class="legend">
-    <span class="leg" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe">
-      <span class="leg-dot" style="background:#2563eb"></span>ML ≥ 55%
-    </span>
-    <span class="leg" style="background:#f0fdf4;color:#065f46;border-color:#bbf7d0">
-      <span class="leg-dot" style="background:#059669"></span>ML ≥ 50%
-    </span>
-    <span class="leg" style="background:#fffbeb;color:#92400e;border-color:#fde68a">
-      <span class="leg-dot" style="background:#d97706"></span>ML ≥ 45%
-    </span>
-    <span class="leg" style="background:#f9fafb;color:#6b7280;border-color:#e5e7eb">
-      <span class="leg-dot" style="background:#bbb"></span>&lt; 45%
-    </span>
-    <span class="leg" style="background:#fef3c7;color:#92400e;border-color:#fbbf24">
-      连续 = 多日重复出现
-    </span>
-  </div>
-</div>
-
-<div class="tabs" id="tabs"></div>
-
-<div class="toolbar">
-  <span class="ctrl-label">排序：</span>
-  <button class="sort-btn active" onclick="setSort('ml',this)">ML 概率</button>
-  <button class="sort-btn" onclick="setSort('cap',this)">资金流入</button>
-  <button class="sort-btn" onclick="setSort('mom',this)">动能</button>
-  <button class="sort-btn" onclick="setSort('rule',this)">规则匹配</button>
-</div>
-
-<div class="day-chips" id="day-chips"></div>
-<div class="grid" id="grid"></div>
-
-<script>
-const DAYS = {days_json};
-
-let curDay = 0, curSort = 'ml';
-
-function fmtCap(v) {{
-  const a = Math.abs(v);
-  const s = v > 0 ? '+' : '';
-  if (a >= 10000) return s + (a / 10000).toFixed(1) + '亿';
-  return s + a + '万';
-}}
-
-function mlCls(v) {{
-  return v >= 55 ? 'c-blue' : v >= 50 ? 'c-teal' : v >= 45 ? 'c-amber' : 'c-gray';
-}}
-function momCls(v) {{
-  return v >= 100 ? 'hot' : v >= 80 ? 'warm' : v >= 60 ? 'ok' : 'dim';
-}}
-function volCls(v) {{
-  return v >= 1.5 ? 'hot' : v >= 1.0 ? 'warm' : 'dim';
-}}
-function spcCls(v) {{
-  return v >= 15 ? 'hot' : v >= 10 ? 'warm' : 'dim';
-}}
-function reachCls(v) {{
-  return v >= 80 ? 'hot' : v >= 70 ? 'warm' : v >= 60 ? 'ok' : 'dim';
-}}
-function ruleCls(v) {{
-  return v >= 80 ? 'r80' : v >= 60 ? 'r60' : v >= 40 ? 'r40' : '';
-}}
-function sigCls(s) {{
-  if (s.startsWith('严格')) return 'strict';
-  if (s.startsWith('突破')) return 'break';
-  return '';
-}}
-
-function renderTabs() {{
-  document.getElementById('tabs').innerHTML = DAYS.map((d, i) =>
-    `<button class="tab${{i === curDay ? ' active' : ''}}" onclick="switchDay(${{i}})">${{d.label}} (${{d.stocks.length}})</button>`
-  ).join('');
-}}
-
-function renderChips(day) {{
-  const st = day.stocks;
-  if (!st.length) {{ document.getElementById('day-chips').innerHTML = ''; return; }}
-  const topML  = st.reduce((a, b) => b.ml > a.ml ? b : a);
-  const pos    = st.filter(s => s.cap > 0);
-  const topCap = pos.length ? pos.reduce((a, b) => b.cap > a.cap ? b : a) : null;
-  const topMom = st.reduce((a, b) => b.mom > a.mom ? b : a);
-  document.getElementById('day-chips').innerHTML = `
-    <span class="chip">共 ${{st.length}} 只</span>
-    <span class="chip">🏆 最高ML：${{topML.n}} ${{topML.ml}}%</span>
-    <span class="chip">💰 资金最优：${{topCap ? topCap.n + ' ' + fmtCap(topCap.cap) : '无净流入'}}</span>
-    <span class="chip">⚡ 动能最强：${{topMom.n}} ${{topMom.mom}}</span>
-  `;
-}}
-
-function renderGrid(day) {{
-  if (!day) {{ document.getElementById('grid').innerHTML = '<div class="empty">暂无数据</div>'; return; }}
-  let st = [...day.stocks];
-  if (curSort === 'ml')   st.sort((a, b) => b.ml - a.ml);
-  else if (curSort === 'cap')  st.sort((a, b) => b.cap - a.cap);
-  else if (curSort === 'mom')  st.sort((a, b) => b.mom - a.mom);
-  else                         st.sort((a, b) => b.rule - a.rule);
-
-  const cls = mlCls;
-  document.getElementById('grid').innerHTML = st.map(s => `
-    <div class="card ${{cls(s.ml)}}">
-      <div class="card-top">
-        <div>
-          <div class="stock-name">
-            ${{s.n}}
-            ${{s.rep ? '<span class="rep-tag">连续</span>' : ''}}
-          </div>
-          <div class="stock-meta">${{s.c}}</div>
-        </div>
-        <div class="ml-box">
-          <div class="ml-num ${{cls(s.ml)}}">${{s.ml}}%</div>
-          <div class="ml-pot${{s.pot !== null && s.pot > 60 ? ' has' : ''}}">潜 ${{s.pot !== null ? s.pot + '%' : '—'}}</div>
-        </div>
-      </div>
-      <div class="sig-row">
-        <span class="sig-tag ${{sigCls(s.sig)}}">${{s.sig}}</span>
-        <span class="price-tag">¥${{s.p}}</span>
-        ${{s.high !== '-' ? `<span class="high-tag">高 ${{s.high}}</span>` : ''}}
-      </div>
-      <div class="metrics">
-        <div class="metric">
-          <div class="m-label">动能</div>
-          <div class="m-val ${{momCls(s.mom)}}">${{s.mom}}</div>
-        </div>
-        <div class="metric">
-          <div class="m-label">量比</div>
-          <div class="m-val ${{volCls(s.vol)}}">${{s.vol}}x</div>
-        </div>
-        <div class="metric">
-          <div class="m-label">空间</div>
-          <div class="m-val ${{spcCls(s.spc)}}">${{s.spc}}%</div>
-        </div>
-        <div class="metric">
-          <div class="m-label">到达</div>
-          <div class="m-val ${{reachCls(s.reach)}}">${{s.reach}}</div>
-        </div>
-        <div class="metric">
-          <div class="m-label">规则</div>
-          <div class="rule-wrap">
-            <span class="rule-num">${{s.rule}}%</span>
-            <div class="rule-bar">
-              <div class="rule-fill ${{ruleCls(s.rule)}}" style="width:${{s.rule}}%"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="cap-row">
-        <span class="${{s.cap > 0 ? 'cap-in' : s.cap < 0 ? 'cap-out' : 'cap-flat'}}">
-          ${{s.cap !== 0 ? fmtCap(s.cap) + ' (' + s.capR + '%)' : '资金持平'}}
-        </span>
-        <span class="big-txt">大单 ${{s.big > 0 ? '+' : ''}}${{s.big}}万</span>
-      </div>
-    </div>
-  `).join('');
-}}
-
-function render() {{
-  renderTabs();
-  const day = DAYS[curDay];
-  renderChips(day);
-  renderGrid(day);
-}}
-
-function switchDay(i) {{ curDay = i; render(); }}
-
-function setSort(s, btn) {{
-  curSort = s;
-  document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  renderGrid(DAYS[curDay]);
-}}
-
-render();
-</script>
-</body>
-</html>"""
-
-    return html
 
 
 # ─────────────────── 文件写入 ───────────────────
@@ -1095,17 +747,7 @@ def _write_report(content: str, mode: str = "overwrite") -> None:
         _safe_print(f"[x] 已删除旧报告: {out_path}")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(content)
-    _safe_print(f"[OK] Markdown 报告已生成: {out_path}")
-
-
-def _write_html_report(content: str, mode: str = "overwrite") -> None:
-    out_path = OUTPUT_HTML_FILE
-    if mode == "new" and os.path.exists(out_path):
-        os.remove(out_path)
-        _safe_print(f"[x] 已删除旧 HTML 看板: {out_path}")
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    _safe_print(f"[OK] HTML 看板已生成: {out_path}")
+    _safe_print(f"[OK] 报告已生成: {out_path}")
 
 
 # ─────────────────── 主流程 ───────────────────
@@ -1115,6 +757,7 @@ def main():
     parser = argparse.ArgumentParser(description="ML预测概率周报生成器")
     parser.add_argument("--threshold", "-t", type=float, default=None,
                         help="ml_predict_prob 筛选阈值（默认交互输入，回车默认40）")
+
     parser.add_argument("--mode", "-m", choices=["overwrite", "new"], default=None,
                         help="写入模式：overwrite=覆盖（默认）, new=删除旧文件再写")
     args = parser.parse_args()
@@ -1155,7 +798,7 @@ def main():
     if args.mode is not None:
         write_mode = args.mode
     else:
-        if os.path.exists(OUTPUT_FILE) or os.path.exists(OUTPUT_HTML_FILE):
+        if os.path.exists(OUTPUT_FILE):
             raw = _safe_input("[?] 报告文件已存在，(O)覆盖 / (N)删除重写？[直接回车默认删除重写]: ").strip().upper()
             write_mode = "overwrite" if raw == "O" else "new"
         else:
@@ -1186,13 +829,11 @@ def main():
         elif d in no_ml_data_dates:
             _safe_print(f"    {d}: 无 ML 预测数据")
 
-    # ── 生成并写入 Markdown ──
-    md_report = generate_report(filtered, trading_days, threshold, weeks=weeks, no_ml_data_dates=no_ml_data_dates)
-    _write_report(md_report, write_mode)
+    # ── 生成报告 ──
+    report = generate_report(filtered, trading_days, threshold, weeks=weeks, no_ml_data_dates=no_ml_data_dates)
 
-    # ── 生成并写入 HTML 看板 ──
-    html_report = generate_html_report(filtered, trading_days, threshold, weeks=weeks, no_ml_data_dates=no_ml_data_dates)
-    _write_html_report(html_report, write_mode)
+    # ── 写入文件 ──
+    _write_report(report, write_mode)
 
 
 if __name__ == "__main__":
