@@ -824,10 +824,17 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
 .leg{{font-size:11px;padding:3px 9px;border-radius:10px;display:flex;align-items:center;gap:5px;border:1px solid transparent}}
 .leg-dot{{width:8px;height:8px;border-radius:50%;flex-shrink:0}}
 /* ── Tabs ── */
-.tabs{{display:flex;gap:5px;overflow-x:auto;padding:6px;background:#fff;border-radius:10px;margin-bottom:12px;border:1px solid #e4e4e0;scrollbar-width:none}}
-.tabs::-webkit-scrollbar{{display:none}}
-.tab{{padding:6px 13px;font-size:12px;border-radius:7px;border:none;background:transparent;color:#888;cursor:pointer;white-space:nowrap;transition:all .15s;font-weight:500}}
+.tabs-wrapper{{position:relative;margin-bottom:12px}}
+.tabs{{display:flex;gap:5px;overflow-x:auto;padding:6px 24px;background:#fff;border-radius:10px;border:1px solid #e4e4e0;-webkit-overflow-scrolling:touch;scroll-behavior:smooth}}
+.tabs::-webkit-scrollbar{{height:3px}}
+.tabs::-webkit-scrollbar-track{{background:transparent}}
+.tabs::-webkit-scrollbar-thumb{{background:#ccc;border-radius:3px}}
+.tab{{padding:6px 13px;font-size:12px;border-radius:7px;border:none;background:transparent;color:#888;cursor:pointer;white-space:nowrap;transition:all .15s;font-weight:500;flex-shrink:0}}
 .tab.active{{background:#111;color:#fff}}
+.tab-arrow{{position:absolute;top:50%;transform:translateY(-50%);width:20px;height:100%;display:flex;align-items:center;justify-content:center;background:linear-gradient(to right,rgba(255,255,255,.9),rgba(255,255,255,.5));border:none;cursor:pointer;font-size:14px;color:#999;z-index:2;pointer-events:none;opacity:0;transition:opacity .2s}}
+.tab-arrow.show{{pointer-events:auto;opacity:1}}
+.tab-arrow.left{{left:0;border-radius:10px 0 0 10px;background:linear-gradient(to left,rgba(255,255,255,0),rgba(255,255,255,.95) 60%)}}
+.tab-arrow.right{{right:0;border-radius:0 10px 10px 0;background:linear-gradient(to right,rgba(255,255,255,0),rgba(255,255,255,.95) 60%)}}
 /* ── 工具栏 ── */
 .toolbar{{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}}
 .ctrl-label{{font-size:12px;color:#888;font-weight:500}}
@@ -891,9 +898,22 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
 /* 空状态 */
 .empty{{text-align:center;padding:40px;color:#bbb;font-size:14px}}
 /* 响应式 */
+@media(max-width:768px){{
+  .header-meta{{flex-direction:column;gap:2px}}
+  .card-top{{flex-direction:column;align-items:stretch}}
+  .ml-box{{text-align:left;margin-left:0;margin-top:4px;display:flex;align-items:center;gap:8px}}
+  .ml-num{{font-size:18px}}
+  .toolbar{{gap:4px}}
+  .toolbar .ctrl-label{{display:none}}
+  .sort-btn{{padding:5px 10px;font-size:11px}}
+}}
 @media(max-width:480px){{
   .grid{{grid-template-columns:1fr}}
   .metrics{{grid-template-columns:repeat(5,1fr)}}
+  .header{{padding:12px}}
+  .header h1{{font-size:15px}}
+  .cap-row{{flex-direction:column;align-items:flex-start;gap:4px}}
+  .sig-row{{flex-wrap:wrap;gap:3px}}
 }}
 </style>
 </head>
@@ -926,7 +946,11 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
   </div>
 </div>
 
-<div class="tabs" id="tabs"></div>
+<div class="tabs-wrapper">
+  <div class="tabs" id="tabs"></div>
+  <button class="tab-arrow left" id="tabArrowLeft" onclick="scrollTabs(-200)">◀</button>
+  <button class="tab-arrow right" id="tabArrowRight" onclick="scrollTabs(200)">▶</button>
+</div>
 
 <div class="toolbar">
   <span class="ctrl-label">排序：</span>
@@ -1067,9 +1091,29 @@ function render() {{
   const day = DAYS[curDay];
   renderChips(day);
   renderGrid(day);
+  setTimeout(updateArrows, 50);
 }}
 
+document.getElementById('tabs').addEventListener('scroll', updateArrows);
+window.addEventListener('resize', updateArrows);
+
 function switchDay(i) {{ curDay = i; render(); }}
+
+function scrollTabs(delta) {{
+  const el = document.getElementById('tabs');
+  el.scrollBy({{ left: delta, behavior: 'smooth' }});
+}}
+
+function updateArrows() {{
+  const el = document.getElementById('tabs');
+  const hasOverflow = el.scrollWidth > el.clientWidth;
+  const canLeft  = el.scrollLeft > 1;
+  const canRight = el.scrollLeft < el.scrollWidth - el.clientWidth - 1;
+  const arrowL = document.getElementById('tabArrowLeft');
+  const arrowR = document.getElementById('tabArrowRight');
+  if (arrowL) arrowL.classList.toggle('show', hasOverflow && canLeft);
+  if (arrowR) arrowR.classList.toggle('show', hasOverflow && canRight);
+}}
 
 function setSort(s, btn) {{
   curSort = s;
