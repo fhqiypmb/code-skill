@@ -407,24 +407,25 @@ def calc_penetration_score(chip_distribution, price_levels, current_price):
 # 散户心态模拟（新增维度）
 # ─────────────────────────────────────────────────────────
 
-def calc_holder_sentiment(buy_price: float, current_price: float) -> dict:
+def calc_holder_sentiment(avg_cost: float, current_price: float) -> dict:
     """
-    散户心态模拟分析
+    散户群体心态模拟分析（市场视角）
 
-    根据买入价格与当前价格计算亏损比例，模拟绝大多数散户在不同亏损阶段的心理状态。
-    核心逻辑：当散户心态到达"极度恐慌无脑割肉"程度时，往往是主力拉升的最佳时机。
+    使用市场平均成本（筹码分布50%分位）作为"全市场散户平均买入价"，
+    模拟整体散户群体在不同亏损阶段的心理状态。
+    核心逻辑：当散户群体心态到达"极度恐慌无脑割肉"程度时，往往是主力拉升的最佳时机。
     """
-    if buy_price <= 0 or current_price <= 0:
+    if avg_cost <= 0 or current_price <= 0:
         return {"error": "价格数据无效"}
 
-    # 计算亏损比例（负数为亏损）
-    loss_ratio = (current_price - buy_price) / buy_price * 100
+    # 计算市场整体亏损比例（负数为亏损）
+    loss_ratio = (current_price - avg_cost) / avg_cost * 100
 
     result = {
-        "buy_price": buy_price,
+        "avg_cost": avg_cost,
         "current_price": current_price,
         "loss_ratio": round(loss_ratio, 2),
-        "loss_amount": round(buy_price - current_price, 2),
+        "loss_amount": round(avg_cost - current_price, 2),
     }
 
     # 心态阶段判定（亏损比例越低，心态越崩）
@@ -551,21 +552,64 @@ def calc_holder_sentiment(buy_price: float, current_price: float) -> dict:
 
     # 拉升时机评分（综合评分，越高说明越适合拉升）
     # 最优区间是 -30% 到 -40%（绝望期）
+    # 同时根据股票自身 avg_cost 动态计算"理想买点"价位，给出散户视角建议
+    ideal_despair = avg_cost * 0.70   # 进入绝望期(-30%)对应价位
+    ideal_givrup = avg_cost * 0.60    # 进入躺平期(-40%)对应价位
+    rebound_top  = avg_cost * 0.85    # 微亏期上沿(-15%)
+    deep_numb    = avg_cost * 0.50    # 麻木区(-50%)
+
     if -40 <= loss_ratio <= -25:
         result["timing_score"] = 100
         result["timing_desc"] = "★★★ 最佳拉升时机 ★★★"
+        result["action_advice"] = (
+            f"散户已进入恐慌割肉区，主力收割性价比最高。\n"
+            f"     -> 散户视角：可跟随主力建仓，当前价 {current_price:.2f} 元即在黄金区\n"
+            f"        若跌破 {deep_numb:.2f} 元（亏-50%）反而进入麻木区，拉升动力下降"
+        )
     elif -50 <= loss_ratio <= -20:
         result["timing_score"] = 85
         result["timing_desc"] = "★★☆ 次佳拉升时机"
+        if loss_ratio < -25:
+            note = f"已接近最佳建仓区，可分批介入"
+        else:
+            note = f"时机较好，建议分批建仓"
+        result["action_advice"] = (
+            f"{note}。\n"
+            f"     -> 散户视角：理想加仓区 {ideal_givrup:.2f}~{ideal_despair:.2f} 元（亏-30%~-40%绝望期）"
+        )
     elif -60 <= loss_ratio <= -10:
         result["timing_score"] = 60
-        result["timing_desc"] = "★☆☆ 可考虑拉升"
+        result["timing_desc"] = "★☆☆ 时机一般"
+        if loss_ratio > -25:
+            # 偏浅 → 等再跌
+            need_drop = abs(loss_ratio - (-30))
+            result["action_advice"] = (
+                f"散户尚未充分割肉，主力可能还想再砸一砸。\n"
+                f"     -> 散户视角：暂不建议追入，等散户进一步割肉\n"
+                f"        理想买点：股价再跌至约 {ideal_despair:.2f} 元"
+                f"（再跌 {need_drop:.1f}% 进入绝望期）"
+            )
+        else:
+            # 偏深 → 已躺平
+            result["action_advice"] = (
+                f"散户已接近躺平区，但拉升动力较弱。\n"
+                f"     -> 散户视角：可小仓位试探，需观察成交量是否放大\n"
+                f"        若放量突破 {avg_cost:.2f} 元（市场平均成本）才是真启动"
+            )
     elif loss_ratio >= 0:
         result["timing_score"] = 20
         result["timing_desc"] = "不建议拉升（散户盈利）"
+        result["action_advice"] = (
+            f"市场整体盈利 +{loss_ratio:.1f}%，散户不会割肉，主力无收割空间。\n"
+            f"     -> 散户视角：不建议追高，等回调至 {avg_cost:.2f} 元附近再观察"
+        )
     else:
         result["timing_score"] = 40
         result["timing_desc"] = "拉升阻力较大"
+        result["action_advice"] = (
+            f"散户已深度套牢但已麻木，需大利好催化。\n"
+            f"     -> 散户视角：观望为主，等待放量异动信号（量能放大3倍以上）"
+        )
 
     return result
 
@@ -580,7 +624,7 @@ def render_sentiment_bar(panic_score: float, width: int = 20) -> str:
 # 核心分析
 # ─────────────────────────────────────────────────────────
 
-def analyze_chip(code: str, chip_df: pd.DataFrame, price_df: pd.DataFrame, buy_price: float = None) -> dict:
+def analyze_chip(code: str, chip_df: pd.DataFrame, price_df: pd.DataFrame) -> dict:
     """主力视角八维分析"""
     result = {}
     latest = chip_df.iloc[-1]
@@ -647,23 +691,6 @@ def analyze_chip(code: str, chip_df: pd.DataFrame, price_df: pd.DataFrame, buy_p
         result["dead_desc_num"] = result["pattern_desc_num"] = result["cost_desc_num"] = result["penetration_desc_num"] = "无"
         result["dead_desc"] = result["pattern_desc"] = result["cost_desc"] = result["penetration_desc"] = "数据不足"
 
-    # === 原收割成熟度评分 ===
-    harvest_score = trap_score * 0.35 + blood_score * 0.30 + exit_score * 0.25 + concentration_score * 0.10
-    result["harvest_score"] = round(harvest_score, 1)
-
-    if harvest_score >= 70:
-        result["verdict"] = "[OK] 收割条件成熟"
-        result["verdict_desc"] = "大多数筹码深度被套，带血筹码充裕，拉升出货空间大。主力此刻吸筹性价比极高。"
-    elif harvest_score >= 50:
-        result["verdict"] = "[WARN] 条件初步具备"
-        result["verdict_desc"] = "恐慌程度较高但尚未到极致，仍有散户未割肉离场。可能处于吸筹过程中。"
-    elif harvest_score >= 30:
-        result["verdict"] = "[WAIT] 尚未成熟"
-        result["verdict_desc"] = "套牢程度不足，散户仍有较多获利盘，主力尚无充分收割条件。"
-    else:
-        result["verdict"] = "[NO] 不具备收割条件"
-        result["verdict_desc"] = "大多数筹码仍处于获利状态，散户情绪稳定，不存在恐慌性抛售。"
-
     # === 综合总分（八维） ===
     total_score = (
         trap_score * 0.12 + blood_score * 0.12 + exit_score * 0.10 + concentration_score * 0.08
@@ -685,10 +712,59 @@ def analyze_chip(code: str, chip_df: pd.DataFrame, price_df: pd.DataFrame, buy_p
         result["final_verdict"] = "[不买]"
         result["final_desc"] = "不具备买入条件，大多数筹码获利，无收割空间"
 
-    # === 散户心态模拟分析（新增） ===
+    # === 散户群体心态模拟分析（自动基于市场平均成本） ===
     result["holder_sentiment"] = None
-    if buy_price and buy_price > 0:
-        result["holder_sentiment"] = calc_holder_sentiment(buy_price, current_price)
+    avg_cost = result.get("avg_cost", 0)
+    if avg_cost and avg_cost > 0:
+        result["holder_sentiment"] = calc_holder_sentiment(avg_cost, current_price)
+
+        # 用八维总分对操作建议做仲裁，避免心态视角与综合评分打架
+        hs = result["holder_sentiment"]
+        sentiment_mature = hs.get("timing_score", 0) >= 85  # 心态85+表示散户已成熟
+        sentiment_brewing = hs.get("timing_score", 0) >= 60  # 60-85表示酝酿中
+        ideal_low = avg_cost * 0.60
+        ideal_high = avg_cost * 0.70
+
+        if total_score >= 70:
+            if sentiment_mature:
+                hs["action_advice"] = (
+                    f"八维 {total_score:.0f}分 + 散户进入恐慌区 -> 主力收割条件全面成熟。\n"
+                    f"     -> 综合判断：可建仓，当前价 {current_price:.2f} 元处于黄金区"
+                )
+            else:
+                hs["action_advice"] = (
+                    f"八维 {total_score:.0f}分（条件优秀），但散户心态尚未崩溃。\n"
+                    f"     -> 综合判断：可逐步建仓，主力可能已先于散户行动"
+                )
+        elif total_score >= 50:
+            # 中间区——这是最容易打架的区间
+            if sentiment_mature:
+                hs["action_advice"] = (
+                    f"心态视角：散户割肉意愿强（局部利好）\n"
+                    f"     但八维仅 {total_score:.0f}分（观望区），筹码形态/穿透力等不足\n"
+                    f"     -> 综合判断：等待更明确信号，不建议立即建仓\n"
+                    f"        若坚持介入，分批价位：{ideal_low:.2f} ~ {ideal_high:.2f} 元（绝望期区间）\n"
+                    f"        重点观察：维度6筹码形态是否收敛为单峰、维度8穿透力是否改善"
+                )
+            elif sentiment_brewing:
+                need_drop = abs(loss_ratio - (-30)) if loss_ratio > -30 else 0
+                hs["action_advice"] = (
+                    f"八维 {total_score:.0f}分 + 散户尚未充分割肉 -> 主力可能还想再砸一砸。\n"
+                    f"     -> 综合判断：暂不建议追入\n"
+                    f"        理想买点：{ideal_high:.2f} 元附近（再跌 {need_drop:.1f}% 进入绝望期）"
+                )
+            else:
+                hs["action_advice"] = (
+                    f"八维 {total_score:.0f}分 + 散户仍盈利或深度麻木 -> 收割条件不齐备。\n"
+                    f"     -> 综合判断：观望，等待散户心态进一步演化"
+                )
+        else:
+            # 八维总分<50，无论心态如何都不建议
+            hs["action_advice"] = (
+                f"八维仅 {total_score:.0f}分，主力收割条件不足。\n"
+                f"     -> 综合判断：不建议买入，等待筹码结构改善\n"
+                f"        参考关键价位：{ideal_high:.2f} 元（市场绝望期）"
+            )
 
     return result
 
@@ -706,11 +782,6 @@ def print_report(code: str, name: str, r: dict) -> None:
     print(f"  股票：{name}({code})")
     print(f"  当前价格：{r['current_price']:.2f} 元  ({r['price_date']})")
     print(f"  筹码数据：{r['chip_date']}")
-
-    # 显示买入价格（如果有）
-    if r.get("holder_sentiment"):
-        hs = r["holder_sentiment"]
-        print(f"  买入价格：{hs['buy_price']:.2f} 元")
 
     print("-" * W)
 
@@ -807,46 +878,42 @@ def print_report(code: str, name: str, r: dict) -> None:
         bar = render_bar(score, 15)
         print(f"    {i+1}.{dim}: {score:>5.1f}分 [{bar}]")
 
-    # === 散户心态模拟分析（新增模块） ===
+    # === 散户群体心态模拟分析（市场视角） ===
     if r.get("holder_sentiment"):
         hs = r["holder_sentiment"]
         print("\n" + "=" * W)
-        print("  散户心态模拟分析（你的买入价视角）")
+        print("  散户群体心态模拟（基于市场平均成本）")
         print("=" * W)
 
         # 基本信息行
-        profit_symbol = "📈" if hs['loss_ratio'] >= 0 else "📉"
-        print(f"\n  {profit_symbol} 买入价：{hs['buy_price']:.2f} 元")
-        print(f"     当前价：{hs['current_price']:.2f} 元")
+        profit_symbol = "[+]" if hs['loss_ratio'] >= 0 else "[-]"
+        print(f"\n  {profit_symbol} 市场平均成本：{hs['avg_cost']:.2f} 元")
+        print(f"      当前价格：    {hs['current_price']:.2f} 元")
 
         if hs['loss_ratio'] >= 0:
-            print(f"     盈亏：+{abs(hs['loss_ratio']):.1f}% (盈利 {abs(hs['loss_amount']):.2f} 元)")
+            print(f"      市场整体盈利：+{abs(hs['loss_ratio']):.1f}%")
         else:
-            print(f"     盈亏：{hs['loss_ratio']:.1f}% (亏损 {abs(hs['loss_amount']):.2f} 元)")
+            print(f"      市场整体亏损：{hs['loss_ratio']:.1f}%")
 
         # 心态阶段
-        print(f"\n  {'─' * 28}")
-        print(f"   心态阶段：{hs['stage_emoji']} {hs['stage']}")
-        print(f"  {'─' * 28}")
+        print(f"\n  {'-' * 28}")
+        print(f"   群体心态阶段：{hs['stage_emoji']} {hs['stage']}")
+        print(f"  {'-' * 28}")
         print(f"     散户心理：\"{hs['mindset']}\"")
         print(f"     典型行为：{hs['behavior']}")
         print(f"     恐慌程度：[{render_sentiment_bar(hs['panic_score'])}] {hs['panic_score']}分")
 
         # 心理关口距离
-        print(f"\n  📍 关键心理关口：")
-        for stage_name, dist, desc in hs['stage_distances'][:4]:
-            print(f"     • {stage_name}：{desc}")
+        print(f"\n  [关键心理关口]")
+        for stage_name, dist, desc in hs['stage_distances'][:5]:
+            print(f"     - {stage_name}：{desc}")
 
-        # 拉升时机评分
-        print(f"\n  ⏰ 拉升时机评分：{hs['timing_score']}分")
-        print(f"     {hs['timing_desc']}")
-
-        # 核心结论
-        print(f"\n  {'=' * 28}")
-        print(f"   {hs['signal']}")
-        print(f"  {'=' * 28}")
-        print(f"     {hs['signal_desc']}")
-        print(f"\n     {hs['sentiment_desc']}")
+        # 操作建议（散户视角，含具体价位）
+        if hs.get("action_advice"):
+            print(f"\n  {'=' * 28}")
+            print(f"   操作建议")
+            print(f"  {'=' * 28}")
+            print(f"     {hs['action_advice']}")
 
     print("\n" + "-" * W)
     print("  本工具仅供研究，不构成投资建议")
@@ -864,7 +931,7 @@ def is_trading_time() -> bool:
 def main():
     print("=" * 62)
     print("  主力视角筹码收割分析器")
-    print("  原四维 + 增强四维 + 散户心态模拟 = 九维综合分析")
+    print("  原四维 + 增强四维 + 散户群体心态模拟 = 九维综合分析")
     print("=" * 62)
 
     realtime = is_trading_time()
@@ -878,19 +945,6 @@ def main():
         if not code:
             continue
 
-        # 买入价格输入（可选）
-        buy_price = None
-        buy_price_input = input("请输入你的买入价格（直接回车跳过）：").strip()
-        if buy_price_input:
-            try:
-                buy_price = float(buy_price_input)
-                if buy_price <= 0:
-                    print("买入价格必须大于0，已跳过心态分析")
-                    buy_price = None
-            except ValueError:
-                print("价格格式无效，已跳过心态分析")
-                buy_price = None
-
         print(f"\n正在获取 [{code}] 数据，请稍候...\n")
         try:
             name = fetch_stock_name(code)
@@ -901,7 +955,7 @@ def main():
                 print("数据为空，请检查股票代码")
                 continue
 
-            result = analyze_chip(code, chip_df, price_df, buy_price=buy_price)
+            result = analyze_chip(code, chip_df, price_df)
             print_report(code, name, result)
         except Exception as e:
             print(f"分析失败：{e}")
