@@ -555,6 +555,18 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
         grade    = sr.get('grade', '?')          # S/A/B/C/D
         sr_score = sr.get('score', 0.0)
 
+        # 市场环境埋点（不影响主流程：任何异常都被吞掉，details 保持原状）
+        # - import 失败 / 网络失败 / 解析失败 / update 失败 全部隔离
+        # - 失败后 details 仍是 screener 原始返回值，ML 记录正常进行
+        try:
+            from market_env import check_market_environment, env_to_ml_features
+            _mk_env = check_market_environment()  # 槽位缓存,同一轮多次调用零成本
+            _mk_feats = env_to_ml_features(_mk_env)
+            if isinstance(_mk_feats, dict):
+                details.update(_mk_feats)
+        except Exception as _mk_err:
+            logger.debug(f"市场环境埋点失败（不影响信号推送和ML记录）: {_mk_err}")
+
         # ML自动记录 + 预测（复用已有analysis，不重复请求）
         ml_result = _ml_record_signal(code, name, period_name, signal_type, details, analysis)
         ml_prob = ml_result.get('prob')
@@ -634,6 +646,18 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
     """格式化一轮扫描的汇总消息（精简版，无普通信号）"""
     beijing_now = get_beijing_now().strftime('%m-%d %H:%M:%S')
     lines = [f"### 📋 第{round_num}轮汇总 ({beijing_now})"]
+
+    # 市场环境提示（独立try，任何异常都不影响汇总主体）
+    # 注意：模块导入、网络请求、解析、格式化任何环节失败都会被捕获
+    try:
+        from market_env import check_market_environment, format_market_warning
+        env = check_market_environment()
+        warning_md = format_market_warning(env)
+        # 严格类型校验，防止非字符串污染 lines（后续会 join）
+        if warning_md and isinstance(warning_md, str):
+            lines.append(warning_md)
+    except Exception as e:
+        logger.warning(f"市场环境提示生成失败，已跳过（不影响汇总推送）: {e}")
 
     if not all_signals:
         lines.append("本轮无新信号")
@@ -735,9 +759,18 @@ def run_full_round(stock_list: list, webhook: str, secret: str, dedup: SignalDed
 
     # 普通信号已在 on_signal 里完成分析，此处无需补做
 
-    # 推送整合汇总消息
+    # 推送整合汇总消息（外层兜底：即便格式化整体崩溃，也降级推送一个最简版本，
+    # 确保扫描结果不因附加功能失败而丢失通知）
     title = f"第{round_num}轮汇总 | 共{len(all_signals)}条信号"
-    content = _format_round_summary(all_signals, round_num)
+    try:
+        content = _format_round_summary(all_signals, round_num)
+    except Exception as _fmt_err:
+        logger.error(f"汇总格式化异常，降级为最简版本: {_fmt_err}")
+        beijing_now = get_beijing_now().strftime('%m-%d %H:%M:%S')
+        content = (
+            f"### 📋 第{round_num}轮汇总 ({beijing_now})\n\n"
+            f"⚠️ 汇总格式化失败,共扫到 {len(all_signals)} 条信号(详情见日志)"
+        )
     send_dingtalk(webhook, secret, title, content)
 
 
