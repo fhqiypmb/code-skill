@@ -18,6 +18,7 @@ _ML_DIR   = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE  = os.path.join(_ML_DIR, 'shadow_data.json')
 MODEL_FILE = os.path.join(_ML_DIR, 'shadow_model.pkl')
 POTENTIAL_MODEL_FILE = os.path.join(_ML_DIR, 'shadow_potential_model.pkl')
+GAIN_MODEL_FILE = os.path.join(_ML_DIR, 'shadow_gain_model.pkl')
 
 # 多少个交易日后回填实际结果
 OUTCOME_DAYS = 5
@@ -29,6 +30,9 @@ MIN_TRAIN_SAMPLES = 45
 # 当前数据源没有财务/市值/估值，不能直接学习真正10倍/100倍；
 # 先用“5日内最大涨幅 >= 8%”作为早期可验证代理标签。
 POTENTIAL_GAIN_THRESHOLD_PCT = 8.0
+
+# 涨幅模型：预测5日内最大涨幅 ≥8% 的概率（全特征、不校准、纯排序）
+GAIN_THRESHOLD_PCT = 8.0
 
 
 # ==================== 数据读写 ====================
@@ -491,7 +495,10 @@ def train() -> Optional[Any]:
     # 同时训练十倍/百倍早期潜力模型（用高弹性爆发作为当前可验证代理标签）
     potential_bundle = _train_potential_model(labeled, feature_fields)
 
-    _save_report(bundle, labeled, y, feature_fields, potential_bundle)
+    # 训练涨幅排序模型（全特征、不校准、标签统一为 ≥8%）
+    gain_bundle = _train_gain_model(labeled)
+
+    _save_report(bundle, labeled, y, feature_fields, potential_bundle, gain_bundle)
 
     return model
 
@@ -619,6 +626,168 @@ def _train_potential_model(labeled: List[Dict], feature_fields: List[str]) -> Op
     return bundle
 
 
+# ==================== 涨幅排序模型（第三个模型）====================
+
+def _train_gain_model(labeled: List[Dict]) -> Optional[Dict]:
+    """训练涨幅排序模型。
+
+    与短线达标模型的核心区别：
+    1. 标签：max_gain_pct >= GAIN_THRESHOLD_PCT（统一标准，非个股目标价）
+    2. 特征：全量特征（含 sr_score 等派生字段，实战验证有效）
+    3. 模型：纯 RandomForest，不做 isotonic 校准（保持分数区分度）
+
+    目标不是输出"精准概率"，而是输出一个可靠的排序分数，
+    让实盘可以按分数取 Top-N 信号买入。
+    """
+    try:
+        import numpy as np
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.metrics import accuracy_score, classification_report
+        import joblib
+    except ImportError as e:
+        logger.error(f"涨幅模型依赖缺失: {e}")
+        return None
+
+    gain_data = [r for r in labeled if r.get('max_gain_pct') is not None]
+    if len(gain_data) < MIN_TRAIN_SAMPLES:
+        logger.warning(f"涨幅模型样本不足: {len(gain_data)} < {MIN_TRAIN_SAMPLES}，跳过")
+        return None
+
+    # 全量特征（不排除派生字段）：只排除元信息、结果字段、旧模型预测
+    exclude = {
+        'date', 'code', 'name', 'period', 'signal_type', 'timestamp',
+        'gold_cross_date', 'confirm_date', 'verdict', 'industry',
+        'sr_grade', 'exit_date',
+        'reached_target', 'actual_return', 'exit_price', 'max_high', 'max_gain_pct',
+        'ml_predict_prob', 'ml_predict_gain', 'ml_predict_potential', 'ml_top3_features',
+        # 排除高度冗余的完全重复字段
+        'close', 'an_quote_price', 'an_technical_current_price',
+        'an_technical_ma20', 'stop_loss',
+        'an_technical_method_targets_压力位法',
+        'an_technical_method_targets_ATR通道法',
+        'an_technical_method_targets_斐波那契',
+    }
+    feature_fields = sorted({
+        k for r in gain_data for k, v in r.items()
+        if k not in exclude and isinstance(v, (int, float))
+    })
+
+    logger.info(f"[涨幅模型] 样本: {len(gain_data)} 条，全量特征: {len(feature_fields)} 个（含 sr_score 等派生字段）")
+
+    X = np.array([[r.get(f, 0) or 0 for f in feature_fields] for r in gain_data], dtype=float)
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    y = np.array([
+        1 if float(r.get('max_gain_pct') or 0) >= GAIN_THRESHOLD_PCT else 0
+        for r in gain_data
+    ], dtype=int)
+
+    if len(set(y.tolist())) < 2:
+        logger.warning("涨幅模型只有单一类别，跳过训练")
+        return None
+
+    logger.info(f"[涨幅模型] 正样本比例(≥{GAIN_THRESHOLD_PCT:.1f}%): {y.mean():.2%}")
+
+    # 时间序列切分
+    gain_data_sorted = sorted(gain_data, key=lambda r: r.get('date', ''))
+    n_split = int(len(gain_data_sorted) * 0.8)
+    X_sorted = np.array([[r.get(f, 0) or 0 for f in feature_fields] for r in gain_data_sorted], dtype=float)
+    X_sorted = np.nan_to_num(X_sorted, nan=0.0, posinf=0.0, neginf=0.0)
+    y_sorted = np.array([
+        1 if float(r.get('max_gain_pct') or 0) >= GAIN_THRESHOLD_PCT else 0
+        for r in gain_data_sorted
+    ], dtype=int)
+
+    X_train, X_test = X_sorted[:n_split], X_sorted[n_split:]
+    y_train, y_test = y_sorted[:n_split], y_sorted[n_split:]
+
+    if len(set(y_train.tolist())) < 2:
+        logger.warning("涨幅模型训练集只有单一类别，跳过训练")
+        return None
+
+    # 纯 RF，不做校准
+    model = RandomForestClassifier(
+        n_estimators=100, max_depth=10,
+        min_samples_split=5, min_samples_leaf=2,
+        random_state=42, n_jobs=-1,
+    )
+    model.fit(X_train, y_train)
+
+    train_acc = accuracy_score(y_train, model.predict(X_train))
+    test_acc = accuracy_score(y_test, model.predict(X_test))
+    logger.info(f"[涨幅模型] 训练集准确率: {train_acc:.2%}  测试集准确率: {test_acc:.2%}")
+    logger.info(f"\n{classification_report(y_test, model.predict(X_test))}")
+
+    # 特征重要性
+    importance = sorted(
+        zip(feature_fields, model.feature_importances_),
+        key=lambda x: x[1], reverse=True
+    )
+    logger.info("涨幅模型特征重要性 TOP15:")
+    for i, (fname, imp) in enumerate(importance[:15], 1):
+        logger.info(f"  {i:2d}. {fname:<45} {imp:.4f}")
+
+    # Top-N 命中率验证
+    test_proba = model.predict_proba(X_test)[:, 1]
+    test_order = np.argsort(test_proba)[::-1]
+    logger.info("涨幅模型排序效果（测试集）:")
+    for top_pct in [0.5, 0.3, 0.2, 0.1]:
+        k = max(1, int(len(y_test) * top_pct))
+        hit = y_test[test_order[:k]].mean()
+        baseline = y_test.mean()
+        logger.info(f"  Top{int(top_pct*100):2d}% ({k:3d}只): 命中率 {hit:.1%} (基线 {baseline:.1%}, 提升 {hit/baseline:.1f}x)")
+
+    # 计算实战阈值
+    full_proba = model.predict_proba(X_sorted)[:, 1]
+    full_order = np.argsort(full_proba)[::-1]
+    thresholds = {}
+    for pct in [20, 25, 30]:
+        k = max(1, int(len(full_proba) * pct / 100))
+        thresholds[f'top{pct}_threshold'] = round(float(full_proba[full_order][k - 1]), 4)
+    logger.info(f"[涨幅模型] 实战阈值: {thresholds}")
+
+    bundle = {
+        'model': model,
+        'feature_names': feature_fields,
+        'importance': importance,
+        'train_acc': train_acc,
+        'test_acc': test_acc,
+        'train_date': datetime.now().strftime('%Y-%m-%d'),
+        'sample_count': len(gain_data),
+        'positive_rate': round(float(y.mean()), 4),
+        'gain_threshold_pct': GAIN_THRESHOLD_PCT,
+        'model_role': 'gain_ranking',
+        'label_desc': f'信号后{OUTCOME_DAYS}个交易日内最大涨幅 >= {GAIN_THRESHOLD_PCT:.1f}%',
+        'calibrated': False,
+        'thresholds': thresholds,
+    }
+    joblib.dump(bundle, GAIN_MODEL_FILE)
+    logger.info(f"涨幅模型已保存: {GAIN_MODEL_FILE}")
+    return bundle
+
+
+def predict_gain(record: Dict) -> Optional[float]:
+    """用涨幅排序模型预测该信号的涨幅概率（排序分数，非严格概率）。
+
+    返回 0~100 的分数，分数越高越可能 5 日内涨 ≥8%。
+    实盘建议：取分数 ≥ 67（历史 Top20%）的信号买入。
+    """
+    if not os.path.exists(GAIN_MODEL_FILE):
+        return None
+    try:
+        import joblib
+        import numpy as np
+        bundle = joblib.load(GAIN_MODEL_FILE)
+        model = bundle['model']
+        feature_names = bundle['feature_names']
+        X = np.array([[record.get(f, 0) or 0 for f in feature_names]], dtype=float)
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        prob = model.predict_proba(X)[0][1]
+        return round(float(prob) * 100, 1)
+    except Exception as e:
+        logger.warning(f"涨幅模型预测失败: {e}")
+        return None
+
+
 def _calc_potential_buckets(probabilities, labels) -> List[Dict]:
     """按潜力阈值统计测试集命中率。"""
     buckets = [
@@ -723,7 +892,7 @@ FEATURE_NAMES_ZH = {
 }
 
 
-def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str], potential_bundle: Optional[Dict] = None) -> None:
+def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str], potential_bundle: Optional[Dict] = None, gain_bundle: Optional[Dict] = None) -> None:
     """生成模型分析报告 model_report.md"""
     report_file = os.path.join(_ML_DIR, 'model_report.md')
     train_date  = bundle['train_date']
@@ -879,8 +1048,35 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
                 direction = "↑高弹性更高" if diff > 0 else "↓普通更高"
                 lines.append(f"| `{fname}` | {high_mean:.3f} | {low_mean:.3f} | {diff:+.3f} {direction} |")
 
+    # ── 涨幅排序模型 ──
+    if gain_bundle:
+        lines.append(f"\n---\n## 四、涨幅排序模型（新·第三个模型）")
+        lines.append(f"\n任务：纯排序模型，预测信号发出后{OUTCOME_DAYS}个交易日内最大涨幅 >= {gain_bundle.get('gain_threshold_pct', GAIN_THRESHOLD_PCT):.1f}% 的概率。")
+        lines.append(f"\n与短线达标模型的核心区别：")
+        lines.append(f"- 标签统一标准（≥8%），不依赖个股特定目标价")
+        lines.append(f"- 特征全量（含 sr_score 等派生字段，实战验证有效）")
+        lines.append(f"- 不做 isotonic 校准，保持分数区分度，专为排序设计")
+        lines.append(f"- **样本数**: {gain_bundle.get('sample_count', '?')}")
+        lines.append(f"- **正样本率**: {gain_bundle.get('positive_rate', 0):.1%}")
+        lines.append(f"- **训练集准确率**: {gain_bundle.get('train_acc', 0):.2%}  |  **测试集准确率**: {gain_bundle.get('test_acc', 0):.2%}")
+        thresholds = gain_bundle.get('thresholds', {})
+        if thresholds:
+            lines.append(f"\n### 实战阈值")
+            lines.append("| 阈值 | 含义 |")
+            lines.append("|------|------|")
+            for k, v in sorted(thresholds.items()):
+                pct = k.replace('top', '').replace('_threshold', '')
+                lines.append(f"| >= {v} | 历史 Top{pct}% 信号 |")
+        g_imp = gain_bundle.get('importance', [])
+        if g_imp:
+            lines.append(f"\n### 特征重要性 TOP15")
+            lines.append("| 排名 | 特征名 | 重要性得分 |")
+            lines.append("|------|--------|------------|")
+            for i, (fname, imp) in enumerate(g_imp[:15], 1):
+                lines.append(f"| {i} | `{fname}` | {imp:.4f} |")
+
     # ── 结论 ──
-    lines.append(f"\n---\n## 四、结论摘要")
+    lines.append(f"\n---\n## 五、结论摘要")
     top3 = [f for f, _ in importance[:3]]
     lines.append(f"- 短线达标模型最关键的3个特征: `{'` / `'.join(top3)}`")
     overall_rate = sum(r.get('reached_target', 0) for r in labeled) / len(labeled)
@@ -1025,8 +1221,8 @@ def record_and_predict(
     save: bool = True,
 ) -> Dict:
     """
-    记录信号 + 立即预测短线达标概率和早期潜力概率，一步完成。
-    返回 {'prob': 达标概率(0-100), 'potential': 高弹性潜力概率(0-100)}，
+    记录信号 + 立即预测三个模型的概率，一步完成。
+    返回 {'prob': 达标概率, 'potential': 高弹性潜力概率, 'gain': 涨幅排序分数}，
     模型不存在或失败时对应值为 None。
 
     参数:
@@ -1052,11 +1248,13 @@ def record_and_predict(
                 )
             prob = predict(record) if record else None
             potential = predict_potential(record) if record else None
+            gain = predict_gain(record) if record else None
 
             # 将ML预测结果回写到记录中（仅供查阅，不参与训练）
             if save and record and isinstance(record, dict):
                 record['ml_predict_prob'] = prob
                 record['ml_predict_potential'] = potential
+                record['ml_predict_gain'] = gain
                 record['ml_top3_features'] = _get_model_top3()
                 data = _load_data()
                 for r in reversed(data):
@@ -1066,20 +1264,19 @@ def record_and_predict(
                         r.get('signal_type') == record.get('signal_type')):
                         r['ml_predict_prob'] = prob
                         r['ml_predict_potential'] = potential
-                        # 清理旧回归模型字段，避免后续报告继续误用
-                        r.pop('ml_predict_gain', None)
+                        r['ml_predict_gain'] = gain
                         r['ml_top3_features'] = record['ml_top3_features']
                         break
                 _save_data(data)
 
-            return {'prob': prob, 'potential': potential}
+            return {'prob': prob, 'potential': potential, 'gain': gain}
         except Exception as e:
             import traceback
             logger.error(f"ML记录/预测失败 {code} (第{attempt}次): {e}\n{traceback.format_exc()}")
             if attempt < 3:
                 import time
                 time.sleep(1)
-    return {'prob': None, 'potential': None}
+    return {'prob': None, 'potential': None, 'gain': None}
 
 
 # ==================== 统计 ====================
@@ -1100,4 +1297,5 @@ def get_stats() -> Dict:
         'by_period':    by_period,
         'model_exists': os.path.exists(MODEL_FILE),
         'potential_model_exists': os.path.exists(POTENTIAL_MODEL_FILE),
+        'gain_model_exists': os.path.exists(GAIN_MODEL_FILE),
     }

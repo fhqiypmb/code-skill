@@ -149,7 +149,46 @@
 | `an_market_pos_vol_ratio` | 0.578 | 0.643 | -0.064 ↓普通更高 |
 
 ---
-## 四、结论摘要
+## 四、涨幅排序模型（新·第三个模型）
+
+任务：纯排序模型，预测信号发出后5个交易日内最大涨幅 >= 8.0% 的概率。
+
+与短线达标模型的核心区别：
+- 标签统一标准（≥8%），不依赖个股特定目标价
+- 特征全量（含 sr_score 等派生字段，实战验证有效）
+- 不做 isotonic 校准，保持分数区分度，专为排序设计
+- **样本数**: 2585
+- **正样本率**: 24.9%
+- **训练集准确率**: 92.65%  |  **测试集准确率**: 76.79%
+
+### 实战阈值
+| 阈值 | 含义 |
+|------|------|
+| >= 0.4419 | 历史 Top20% 信号 |
+| >= 0.364 | 历史 Top25% 信号 |
+| >= 0.3141 | 历史 Top30% 信号 |
+
+### 特征重要性 TOP15
+| 排名 | 特征名 | 重要性得分 |
+|------|--------|------------|
+| 1 | `an_technical_expected_gain_pct` | 0.0518 |
+| 2 | `an_market_pos_relative_strength` | 0.0392 |
+| 3 | `an_quote_turnover_rate` | 0.0378 |
+| 4 | `sr_score` | 0.0335 |
+| 5 | `an_success_rate_score` | 0.0322 |
+| 6 | `an_quote_change_pct` | 0.0316 |
+| 7 | `an_success_rate_dim_reach_prob` | 0.0303 |
+| 8 | `sc_gold_day_vol` | 0.0260 |
+| 9 | `an_capital_big_net_in` | 0.0256 |
+| 10 | `sc_first_double_vol` | 0.0251 |
+| 11 | `an_capital_flow_ratio` | 0.0246 |
+| 12 | `an_quote_amount` | 0.0245 |
+| 13 | `an_capital_main_net_in` | 0.0244 |
+| 14 | `an_success_rate_dim_momentum` | 0.0243 |
+| 15 | `sc_yin_vol` | 0.0240 |
+
+---
+## 五、结论摘要
 - 短线达标模型最关键的3个特征: `an_capital_flow_ratio` / `an_quote_change_pct` / `an_market_pos_relative_strength`
 - 短线整体达标率: 21.9%（短线确定性基准线）
 - 高弹性整体命中率: 24.9%（潜力模型基准线）

@@ -390,7 +390,18 @@ def _get_ml_summary(r: Dict) -> str:
             potential_str = f"<font color=\"#f57c00\">{potential_val:.1f}%</font>"
         else:
             potential_str = f"{potential_val:.1f}%"
-    return f"达{prob_str} / 潜{potential_str}"
+    gain = r.get("ml_predict_gain")
+    if gain is None or gain == "":
+        gain_str = "-"
+    else:
+        gain_val = float(gain)
+        if gain_val >= 67:
+            gain_str = f"<font color=\"#d32f2f\"><b>{gain_val:.0f}</b></font>"
+        elif gain_val >= 60:
+            gain_str = f"<font color=\"#f57c00\">{gain_val:.0f}</font>"
+        else:
+            gain_str = f"{gain_val:.0f}"
+    return f"达{prob_str} / 潜{potential_str} / 涨{gain_str}"
 
 
 def _get_prob_str(prob: float) -> str:
@@ -417,8 +428,8 @@ def _weekday_cn(date_str: str) -> str:
 
 def _render_table(records: List[Dict]) -> str:
     lines = []
-    lines.append("| # | 股票 | 信号 | 价/高 | 资金 | 大单 | 因子 | ML | 规则 |")
-    lines.append("|:---:|:----|:---:|:----:|:----:|:----:|:----|:----:|:---:|")
+    lines.append("| # | 股票 | 信号 | 价/高 | 资金 | 大单 | 因子 | ML(达/潜/涨) | 规则 |")
+    lines.append("|:---:|:----|:---:|:----:|:----:|:----:|:----:|:----:|:---:|")
     for i, r in enumerate(records, 1):
         code = r.get("code", "")
         name = r.get("name", "")
@@ -478,6 +489,7 @@ def generate_report(
     lines.append("| 达 | 到达概率评分，衡量目标价短期可达性 | >=70 | 粗体>=70 橙色>=60 | `an_success_rate_dim_reach_prob` |")
     lines.append("| ML达 | 短线达标模型概率，预测5日内能否触达目标价 | - | 🔥>=60% 🔴>=50% 🟡>=40% ⚪<40% | `ml_predict_prob` |")
     lines.append("| ML潜 | 潜力模型概率，当前表示5日内最大涨幅>=8%的概率 | - | 🔥>=60% 🔴>=50% 🟡>=40% ⚪<40% | `ml_predict_potential` |")
+    lines.append("| ML涨 | 涨幅排序模型分数（全特征、不校准），预测5日内涨≥8%概率，≥67为Top20%信号 | - | 🔥>=67 ⭐>=60 💡<60 | `ml_predict_gain` |")
     lines.append("| 规则 | 10条V2规则匹配百分比 | 100%为满分 | 🔥100%满分 🔴>=86% 🟡>=71% ⚪<71% | `calc_v2_rule_match()` |")
     lines.append("")
     lines.append("> 示例：`资金 +740万(3.7)` 表示主力净流入约740万元，主力净流入强度约为3.7%。")
@@ -766,6 +778,9 @@ def _build_html_days_data(
             pot_raw = r.get("ml_predict_potential")
             pot: Optional[float] = round(float(pot_raw), 1) if pot_raw is not None and pot_raw != "" else None
 
+            gain_raw = r.get("ml_predict_gain")
+            gain: Optional[float] = round(float(gain_raw), 0) if gain_raw is not None and gain_raw != "" else None
+
             high_str = _get_high(r)  # 如 "15.22(+3.7%)" 或 "-"
 
             rule_pct = _get_rule_pct(r)
@@ -785,6 +800,7 @@ def _build_html_days_data(
                 "reach": int(reach),
                 "ml":   ml,
                 "pot":  pot,
+                "gain": gain,
                 "rule": rule_pct,
                 "rep":  code_dates.get(r.get("code", ""), 1) >= 2,
             })
@@ -968,6 +984,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
 <div class="toolbar">
   <span class="ctrl-label">排序：</span>
   <button class="sort-btn active" onclick="setSort('ml',this)">ML 概率</button>
+  <button class="sort-btn" onclick="setSort('gain',this)">🔥涨幅分</button>
   <button class="sort-btn" onclick="setSort('cap',this)">资金流入</button>
   <button class="sort-btn" onclick="setSort('mom',this)">动能</button>
   <button class="sort-btn" onclick="setSort('rule',this)">规则匹配</button>
@@ -1037,6 +1054,7 @@ function renderGrid(day) {{
   if (!day) {{ document.getElementById('grid').innerHTML = '<div class="empty">暂无数据</div>'; return; }}
   let st = [...day.stocks];
   if (curSort === 'ml')   st.sort((a, b) => b.ml - a.ml);
+  else if (curSort === 'gain') st.sort((a, b) => (b.gain||0) - (a.gain||0));
   else if (curSort === 'cap')  st.sort((a, b) => b.cap - a.cap);
   else if (curSort === 'mom')  st.sort((a, b) => b.mom - a.mom);
   else                         st.sort((a, b) => b.rule - a.rule);
@@ -1055,6 +1073,7 @@ function renderGrid(day) {{
         <div class="ml-box">
           <div class="ml-num ${{cls(s.ml)}}">${{s.ml}}%</div>
           <div class="ml-pot${{s.pot !== null && s.pot > 60 ? ' has' : ''}}">潜 ${{s.pot !== null ? s.pot + '%' : '—'}}</div>
+          <div class="ml-gain${{s.gain !== null && s.gain >= 67 ? ' hot' : (s.gain !== null && s.gain >= 60 ? ' warm' : '')}}" style="font-size:10px;color:${{s.gain !== null && s.gain >= 67 ? '#dc2626' : (s.gain !== null && s.gain >= 60 ? '#d97706' : '#bbb')}};margin-top:2px;font-weight:${{s.gain !== null && s.gain >= 67 ? '700' : '400'}}">涨 ${{s.gain !== null ? Math.round(s.gain) : '—'}}</div>
         </div>
       </div>
       <div class="sig-row">

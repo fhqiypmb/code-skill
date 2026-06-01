@@ -69,7 +69,7 @@ except Exception as _ml_import_err:
 def _ml_record_signal(code, name, period, signal_type, details, analysis):
     """将信号写入ML数据集并返回预测结果，失败自动重试最多3次"""
     if not _ML_AVAILABLE:
-        return {'prob': None, 'potential': None}
+        return {'prob': None, 'potential': None, 'gain': None}
     for attempt in range(1, 4):
         try:
             return _shadow_learner.record_and_predict(
@@ -85,7 +85,7 @@ def _ml_record_signal(code, name, period, signal_type, details, analysis):
             )
             if attempt < 3:
                 time.sleep(1)
-    return {'prob': None, 'potential': None}
+    return {'prob': None, 'potential': None, 'gain': None}
 
 def _get_probability_color(probability: float) -> str:
     """根据概率返回 HTML 颜色代码
@@ -593,6 +593,10 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
                     ml_parts.append(f"🤖 **ML达标**{ml_prob}%")
                 if ml_potential is not None:
                     ml_parts.append(f"🌱 **潜力**{ml_potential}%")
+                ml_gain = ml_result.get('gain')
+                if ml_gain is not None:
+                    gain_icon = '🔥' if ml_gain >= 67 else ('⭐' if ml_gain >= 60 else '💡')
+                    ml_parts.append(f"{gain_icon} **涨幅**{ml_gain}")
                 rule = _calc_rule_match(period_name, details, analysis)
                 ml_parts.append(f"🎯 **{_format_rule_text(rule)}**")
                 content += "\n\n" + "  ".join(ml_parts)
@@ -610,6 +614,7 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             'analysis':    analysis,
             'ml_prob':     ml_prob,
             'ml_potential': ml_potential,
+            'ml_gain':     ml_result.get('gain'),
         }
 
         pushed_signals.append(sig_entry)
@@ -725,10 +730,14 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             ]
             ml_prob = s.get('ml_prob')
             ml_potential = s.get('ml_potential')
+            ml_gain = s.get('ml_gain')
             if ml_prob is not None:
                 row3_parts.append(f"🤖达标{ml_prob}%")
             if ml_potential is not None:
                 row3_parts.append(f"🌱潜力{ml_potential}%")
+            if ml_gain is not None:
+                gain_icon = '🔥' if ml_gain >= 67 else ('⭐' if ml_gain >= 60 else '💡')
+                row3_parts.append(f"{gain_icon}涨幅{ml_gain}")
             row3_parts.append(f"🎯{_format_rule_text(rule)}")
             lines.append("  ↳ " + "  ".join(row3_parts))
 
