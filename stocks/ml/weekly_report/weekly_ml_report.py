@@ -10,13 +10,18 @@
     python weekly_ml_report.py                  # 默认阈值 40，覆盖已有报告，默认近1周
     python weekly_ml_report.py --threshold 50   # 自定义阈值
     python weekly_ml_report.py --mode new       # 删除旧报告再写新报告（默认覆盖）
+
+注意：本文件处理动态 JSON 数据，类型标注用宽泛的 dict/list，
+      以下 pyright 规则关闭是预期行为。
 """
+
+# pyright: reportMissingTypeArgument=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportImplicitRelativeImport=false, reportUnusedImport=false, reportDeprecated=false
 
 import json
 import os
 import sys
 from datetime import datetime, timedelta
-from typing import List, Dict, Set, Optional
+from typing import Optional
 
 # ─────────────────── 路径配置 ───────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -71,7 +76,7 @@ def _safe_input(prompt: str) -> str:
 
 # ─────────────────── 交易日计算 ───────────────────
 
-def _load_holidays() -> Set[str]:
+def _load_holidays() -> set[str]:
     """加载法定假日（落在工作日的休市日）"""
     if not os.path.exists(HOLIDAYS_FILE):
         return set()
@@ -85,7 +90,7 @@ def _load_holidays() -> Set[str]:
     return holidays
 
 
-def _get_last_week_trading_days(today: datetime = None, weeks: int = 1) -> List[str]:
+def _get_last_week_trading_days(today: datetime | None = None, weeks: int = 1) -> list[str]:
     """
     根据今天日期，返回「本周已过交易日 + 前 N 个完整周」的交易日列表。
     weeks=1 时取本周已过 + 上周；weeks=3 时取本周已过 + 上周 + 上上周 + 上上上周。
@@ -134,7 +139,7 @@ def _get_last_week_trading_days(today: datetime = None, weeks: int = 1) -> List[
 
 # ─────────────────── 数据加载与筛选 ───────────────────
 
-def _load_data() -> List[Dict]:
+def _load_data() -> list[dict]:
     if not os.path.exists(DATA_FILE):
         _safe_print(f"[!] 数据文件不存在: {DATA_FILE}")
         sys.exit(1)
@@ -143,10 +148,10 @@ def _load_data() -> List[Dict]:
 
 
 def _filter_records(
-    data: List[Dict],
-    trading_days: List[str],
+    data: list[dict],
+    trading_days: list[str],
     threshold: float,
-) -> tuple:
+) -> tuple[dict[str, list[dict]], set[str]]:
     """按日期分组，筛选 ml_predict_prob >= threshold 的记录，按 prob 降序
 
     返回: (filtered, no_ml_data_dates)
@@ -186,14 +191,14 @@ def _filter_records(
 
 # ─────────────────── 字段提取辅助 ───────────────────
 
-def _get_signal_price(r: Dict) -> str:
+def _get_signal_price(r: dict) -> str:
     val = r.get("sc_close") or r.get("close") or ""
     if val != "":
         return f"{float(val):.2f}"
     return "-"
 
 
-def _get_capital_flow(r: Dict) -> str:
+def _get_capital_flow(r: dict) -> str:
     net_in = r.get("an_capital_main_net_in")
     if net_in is None or net_in == "":
         return "-"
@@ -209,14 +214,14 @@ def _get_capital_flow(r: Dict) -> str:
     return f"{icon}{sign}{amount_str}{ratio_str}"
 
 
-def _get_capital_net_value(r: Dict) -> float:
+def _get_capital_net_value(r: dict) -> float:
     net_in = r.get("an_capital_main_net_in")
     if net_in is None or net_in == "":
         return 0
     return float(net_in)
 
 
-def _get_big_order_flow(r: Dict) -> str:
+def _get_big_order_flow(r: dict) -> str:
     val = r.get("an_capital_big_net_in")
     if val is None or val == "":
         return "-"
@@ -235,7 +240,7 @@ def _format_amount_wan(val: float) -> str:
     return f"{sign}{val:.0f}万"
 
 
-def _get_capital_flow_plain(r: Dict) -> str:
+def _get_capital_flow_plain(r: dict) -> str:
     net_in = r.get("an_capital_main_net_in")
     if net_in is None or net_in == "":
         return "-"
@@ -245,14 +250,14 @@ def _get_capital_flow_plain(r: Dict) -> str:
     return f"{_format_amount_wan(net_in)}{ratio_str}"
 
 
-def _get_big_order_flow_plain(r: Dict) -> str:
+def _get_big_order_flow_plain(r: dict) -> str:
     val = r.get("an_capital_big_net_in")
     if val is None or val == "":
         return "-"
     return _format_amount_wan(float(val))
 
 
-def _get_rule_score(r: Dict) -> str:
+def _get_rule_score(r: dict) -> str:
     rule = stock_analyzer.calc_v2_rule_match(record=r)
     pct = rule['pct']
     if rule.get('is_full'):
@@ -264,19 +269,19 @@ def _get_rule_score(r: Dict) -> str:
     return f"{E_WHITE} {pct}%"
 
 
-def _get_rule_score_plain(r: Dict) -> str:
+def _get_rule_score_plain(r: dict) -> str:
     rule = stock_analyzer.calc_v2_rule_match(record=r)
     pct = rule['pct']
     return f"**{pct}%**" if rule.get('is_full') or pct >= 90 else f"{pct}%"
 
 
-def _get_rule_pct(r: Dict) -> int:
+def _get_rule_pct(r: dict) -> int:
     """返回规则匹配百分比整数，供 HTML 使用"""
     rule = stock_analyzer.calc_v2_rule_match(record=r)
     return rule['pct']
 
 
-def _get_momentum(r: Dict) -> str:
+def _get_momentum(r: dict) -> str:
     val = r.get("an_success_rate_dim_momentum")
     if val is None or val == "":
         return "-"
@@ -291,7 +296,7 @@ def _get_momentum(r: Dict) -> str:
         return f"{E_WHITE} {val:.1f}"
 
 
-def _get_high(r: Dict) -> str:
+def _get_high(r: dict) -> str:
     val = r.get("max_high")
     if val is not None and val != "":
         max_h = float(val)
@@ -306,7 +311,7 @@ def _get_high(r: Dict) -> str:
     return "-"
 
 
-def _get_predict_potential(r: Dict) -> str:
+def _get_predict_potential(r: dict) -> str:
     val = r.get("ml_predict_potential")
     if val is None or val == "":
         return "-"
@@ -321,7 +326,7 @@ def _get_predict_potential(r: Dict) -> str:
         return f"{E_WHITE} {val:.1f}%"
 
 
-def _get_vol_ratio(r: Dict) -> str:
+def _get_vol_ratio(r: dict) -> str:
     val = r.get("an_market_pos_vol_ratio")
     if val is None or val == "":
         return "-"
@@ -333,7 +338,7 @@ def _get_vol_ratio(r: Dict) -> str:
     return f"{val:.2f}x"
 
 
-def _get_space(r: Dict) -> str:
+def _get_space(r: dict) -> str:
     val = r.get("an_technical_expected_gain_pct")
     if val is None or val == "":
         return "-"
@@ -345,7 +350,7 @@ def _get_space(r: Dict) -> str:
     return f"{val:.1f}%"
 
 
-def _get_reach_prob(r: Dict) -> str:
+def _get_reach_prob(r: dict) -> str:
     val = r.get("an_success_rate_dim_reach_prob")
     if val is None or val == "":
         return "-"
@@ -357,7 +362,7 @@ def _get_reach_prob(r: Dict) -> str:
     return f"{val:.0f}"
 
 
-def _get_factor_summary(r: Dict) -> str:
+def _get_factor_summary(r: dict) -> str:
     momentum = r.get("an_success_rate_dim_momentum")
     if momentum is None or momentum == "":
         mom = "-"
@@ -367,7 +372,7 @@ def _get_factor_summary(r: Dict) -> str:
     return f"动{mom}｜量{_get_vol_ratio(r)}｜空{_get_space(r)}｜达{_get_reach_prob(r)}"
 
 
-def _get_ml_summary(r: Dict) -> str:
+def _get_ml_summary(r: dict) -> str:
     prob = r.get("ml_predict_prob", 0)
     if prob is None or prob == "":
         prob_str = "-"
@@ -426,7 +431,7 @@ def _weekday_cn(date_str: str) -> str:
     return WEEKDAY_CN[d.weekday()]
 
 
-def _render_table(records: List[Dict]) -> str:
+def _render_table(records: list[dict]) -> str:
     lines = []
     lines.append("| # | 股票 | 信号 | 价/高 | 资金 | 大单 | 因子 | ML(达/潜/涨) | 规则 |")
     lines.append("|:---:|:----|:---:|:----:|:----:|:----:|:----:|:----:|:---:|")
@@ -453,11 +458,11 @@ def _render_table(records: List[Dict]) -> str:
 
 
 def generate_report(
-    filtered: Dict[str, List[Dict]],
-    trading_days: List[str],
+    filtered: dict[str, list[dict]],
+    trading_days: list[str],
     threshold: float,
     weeks: int = 1,
-    no_ml_data_dates: Set[str] = None,
+    no_ml_data_dates: set[str] | None = None,
 ) -> str:
     if no_ml_data_dates is None:
         no_ml_data_dates = set()
@@ -635,7 +640,7 @@ def generate_report(
         lines.append("")
 
     # ── 多日重复出现统计 ──
-    code_count: Dict[str, Dict] = {}
+    code_count: dict[str, dict] = {}
     for d, records in filtered.items():
         for r in records:
             key = r.get("code", "")
@@ -677,7 +682,7 @@ def generate_report(
         lines.append("---")
         lines.append("")
 
-    all_records: List[Dict] = []
+    all_records: list[dict] = []
     for d, records in filtered.items():
         all_records.extend(records)
 
@@ -725,28 +730,28 @@ def generate_report(
 # ─────────────────── HTML 生成 ───────────────────
 
 def _build_html_days_data(
-    filtered: Dict[str, List[Dict]],
-    trading_days: List[str],
-) -> List[Dict]:
+    filtered: dict[str, list[dict]],
+    trading_days: list[str],
+) -> list[dict]:
     """
     将筛选后的数据转换为 HTML 看板所需的 JSON 结构。
     同时计算哪些股票在多日重复出现，打上 rep 标记。
     """
     # 统计各 code 出现日期数，用于 rep 标记
-    code_dates: Dict[str, int] = {}
+    code_dates: dict[str, int] = {}
     for d, records in filtered.items():
         for r in records:
             code = r.get("code", "")
             code_dates[code] = code_dates.get(code, 0) + 1
 
-    days_data: List[Dict] = []
+    days_data: list[dict] = []
     for d in trading_days:
         if d not in filtered:
             continue
         d_obj = datetime.strptime(d, "%Y-%m-%d")
         label = f"{WEEKDAY_SHORT[d_obj.weekday()]} {d[5:]}"
 
-        stocks: List[Dict] = []
+        stocks: list[dict] = []
         for r in filtered[d]:
             price_raw = r.get("sc_close") or r.get("close") or 0
             price = round(float(price_raw), 2) if price_raw else 0
@@ -776,10 +781,10 @@ def _build_html_days_data(
             ml = round(float(ml_raw), 1) if ml_raw is not None and ml_raw != "" else 0
 
             pot_raw = r.get("ml_predict_potential")
-            pot: Optional[float] = round(float(pot_raw), 1) if pot_raw is not None and pot_raw != "" else None
+            pot: float | None = round(float(pot_raw), 1) if pot_raw is not None and pot_raw != "" else None
 
             gain_raw = r.get("ml_predict_gain")
-            gain: Optional[float] = round(float(gain_raw), 0) if gain_raw is not None and gain_raw != "" else None
+            gain: float | None = round(float(gain_raw), 0) if gain_raw is not None and gain_raw != "" else None
 
             high_str = _get_high(r)  # 如 "15.22(+3.7%)" 或 "-"
 
@@ -815,11 +820,11 @@ def _build_html_days_data(
 
 
 def generate_html_report(
-    filtered: Dict[str, List[Dict]],
-    trading_days: List[str],
+    filtered: dict[str, list[dict]],
+    trading_days: list[str],
     threshold: float,
     weeks: int = 1,
-    no_ml_data_dates: Set[str] = None,
+    no_ml_data_dates: set[str] | None = None,
 ) -> str:
     """生成交互式 HTML 看板报告"""
     if no_ml_data_dates is None:
