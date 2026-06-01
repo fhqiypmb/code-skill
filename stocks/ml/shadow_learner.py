@@ -745,12 +745,18 @@ def _train_gain_model(labeled: List[Dict]) -> Optional[Dict]:
         thresholds[f'top{pct}_threshold'] = round(float(full_proba[full_order][k - 1]), 4)
     logger.info(f"[涨幅模型] 实战阈值: {thresholds}")
 
+    # 收集 Top-N 命中率（测试集）
+    topN_hits = {}
+    baseline = float(y_test.mean())
+    for top_pct in [50, 30, 20, 10]:
+        k = max(1, int(len(y_test) * top_pct / 100))
+        hit = float(y_test[test_order[:k]].mean())
+        topN_hits[f'top{top_pct}'] = {'n': k, 'hit_rate': round(hit, 4), 'lift': round(hit / baseline, 2) if baseline > 0 else 0}
+
     bundle = {
         'model': model,
         'feature_names': feature_fields,
         'importance': importance,
-        'train_acc': train_acc,
-        'test_acc': test_acc,
         'train_date': datetime.now().strftime('%Y-%m-%d'),
         'sample_count': len(gain_data),
         'positive_rate': round(float(y.mean()), 4),
@@ -759,6 +765,8 @@ def _train_gain_model(labeled: List[Dict]) -> Optional[Dict]:
         'label_desc': f'信号后{OUTCOME_DAYS}个交易日内最大涨幅 >= {GAIN_THRESHOLD_PCT:.1f}%',
         'calibrated': False,
         'thresholds': thresholds,
+        'topN_hits': topN_hits,
+        'baseline': round(baseline, 4),
     }
     joblib.dump(bundle, GAIN_MODEL_FILE)
     logger.info(f"涨幅模型已保存: {GAIN_MODEL_FILE}")
@@ -1057,8 +1065,18 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
         lines.append(f"- 特征全量（含 sr_score 等派生字段，实战验证有效）")
         lines.append(f"- 不做 isotonic 校准，保持分数区分度，专为排序设计")
         lines.append(f"- **样本数**: {gain_bundle.get('sample_count', '?')}")
-        lines.append(f"- **正样本率**: {gain_bundle.get('positive_rate', 0):.1%}")
-        lines.append(f"- **训练集准确率**: {gain_bundle.get('train_acc', 0):.2%}  |  **测试集准确率**: {gain_bundle.get('test_acc', 0):.2%}")
+        lines.append(f"- **基准命中率**: {gain_bundle.get('positive_rate', 0):.1%}（全量正样本占比）")
+        topN = gain_bundle.get('topN_hits', {})
+        baseline = gain_bundle.get('baseline', 0)
+        if topN:
+            lines.append(f"\n### 测试集 Top-N 命中率（核心指标）")
+            lines.append(f"| Top N | 样本数 | 命中率 | 相对基线提升 |")
+            lines.append(f"|-------|--------|--------|------------|")
+            for pct in [50, 30, 20, 10]:
+                key = f'top{pct}'
+                if key in topN:
+                    d = topN[key]
+                    lines.append(f"| Top {pct}% | {d['n']} | **{d['hit_rate']:.1%}** | {d['lift']:.1f}x |")
         thresholds = gain_bundle.get('thresholds', {})
         if thresholds:
             lines.append(f"\n### 实战阈值")
