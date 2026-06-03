@@ -19,7 +19,7 @@ import signal
 import logging
 import argparse
 import importlib.util
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Tuple
 
 # ==================== 优雅退出 ====================
@@ -238,7 +238,7 @@ def is_lunch_break() -> bool:
 
 def get_beijing_now() -> datetime:
     """获取北京时间（GitHub Actions 服务器是UTC）"""
-    utc_now = datetime.utcnow()
+    utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
     return utc_now + timedelta(hours=8)
 
 

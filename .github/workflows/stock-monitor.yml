@@ -56,7 +56,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install akshare
-        run: pip install akshare
+        run: pip install -r stocks/requirements.txt
 
       - name: Update stock list
         run: python stocks/更新股票列表.py
@@ -94,7 +94,8 @@ jobs:
           python-version: '3.12'
 
       - name: Install deps
-        run: pip install pyyaml scikit-learn joblib numpy
+        # 依赖锁定在 stocks/requirements.txt（本地与 CI 共用），避免版本漂移
+        run: pip install -r stocks/requirements.txt
 
       - name: Run monitor
         timeout-minutes: 340
@@ -140,7 +141,8 @@ jobs:
           python-version: '3.12'
 
       - name: Install deps
-        run: pip install scikit-learn joblib numpy
+        # 与 monitor 共用同一锁定清单，保证训练/加载 sklearn 版本一致
+        run: pip install -r stocks/requirements.txt
 
       - name: Run weekly train
         run: python stocks/ml/weekly_train.py

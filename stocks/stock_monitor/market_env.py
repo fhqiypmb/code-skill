@@ -25,7 +25,7 @@ import ssl
 import urllib.request
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, TypedDict
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ _cache_lock = threading.Lock()
 
 def _current_slot() -> str:
     """当前 30min 槽位标识,如 '2026-05-28-10-30' 表示 10:00-10:30 这根 K"""
-    now = datetime.utcnow() + timedelta(hours=8)
+    now = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=8)
     half = '30' if now.minute >= 30 else '00'
     return f"{now.strftime('%Y-%m-%d-%H')}-{half}"
 
@@ -154,7 +154,7 @@ def _drop_unfinished_bar(klines: List[dict]) -> List[dict]:
     try:
         # 新浪 day 格式: '2026-05-28 15:00:00'
         bar_dt = datetime.strptime(last_day, '%Y-%m-%d %H:%M:%S')
-        beijing_now = datetime.utcnow() + timedelta(hours=8)
+        beijing_now = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=8)
         if bar_dt > beijing_now:
             return klines[:-1]
     except (ValueError, TypeError):

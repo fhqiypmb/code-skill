@@ -1,0 +1,8 @@
+# 股票监控 + ML 依赖（本地与 GitHub Actions 共用）
+# scikit-learn 钉死版本：训练(ml-train)保存的 pkl 与加载(monitor)环境必须一致，
+# 否则跨版本 unpickle 会触发 InconsistentVersionWarning 且结果可能失真。
+scikit-learn==1.9.0
+numpy==2.4.1
+joblib==1.5.3
+pyyaml
+akshare
