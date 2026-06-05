@@ -70,10 +70,10 @@ def bucket(records, key_fn, label):
 
 
 if labeled:
-    bucket(labeled, lambda r: int(r.get('reached_target', 0)), "达标率(触达目标价)")
+    bucket(labeled, lambda r: int(r.get('reached_target', 0)), "摸目标价率(原始字段,仅作市场环境对照)")
 
 if gain_ok:
-    bucket(gain_ok, lambda r: 1 if float(r.get('max_gain_pct') or 0) >= 8.0 else 0, "高弹性率(5日内≥8%)")
+    bucket(gain_ok, lambda r: 1 if float(r.get('max_gain_pct') or 0) >= 8.0 else 0, "涨幅率(5日内≥8%,对照口径)")
 
 # 额外：按上证连续跌破根数粗分
 if gain_ok:

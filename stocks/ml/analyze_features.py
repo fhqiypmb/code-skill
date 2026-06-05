@@ -2,8 +2,8 @@
 特征重要性分析 - 本地手动运行，查看两个ML模型的关键因子
 
 模型：
-  1. 短线达标模型：预测5个交易日内是否触达目标价
-  2. 早期潜力模型：预测5个交易日内最大涨幅是否 >= 8%
+  1. 短线胜率模型：预测5个交易日内持有到期净赚 > 5%
+  2. 大涨潜力模型：预测5个交易日内最大涨幅是否 >= 15%
 """
 
 import os
@@ -65,13 +65,13 @@ def _print_model_importance(title: str, model_file: str) -> None:
 
 
 def main():
-    _print_model_importance("短线达标模型", sl.MODEL_FILE)
-    _print_model_importance("十倍/百倍早期潜力模型", sl.POTENTIAL_MODEL_FILE)
+    _print_model_importance("短线胜率模型", sl.MODEL_FILE)
+    _print_model_importance("大涨潜力模型", sl.POTENTIAL_MODEL_FILE)
 
     stats = sl.get_stats()
     print(f"\n[DATA] 当前数据状态")
     print(f"  总记录: {stats['total']}  已标记: {stats['labeled']}  未标记: {stats['unlabeled']}")
-    print(f"  达标准确率: {stats['accuracy']:.2%}")
+    print(f"  摸目标价率(参考): {stats['accuracy']:.2%}")
     print(f"  按周期: {stats['by_period']}")
     print(f"  短线模型: {'存在' if stats['model_exists'] else '不存在'}")
     print(f"  潜力模型: {'存在' if stats.get('potential_model_exists') else '不存在'}")

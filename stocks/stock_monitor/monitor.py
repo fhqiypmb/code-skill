@@ -590,7 +590,7 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
             if ml_prob is not None or ml_potential is not None:
                 ml_parts = []
                 if ml_prob is not None:
-                    ml_parts.append(f"🤖 **ML达标**{ml_prob}%")
+                    ml_parts.append(f"🤖 **ML胜率**{ml_prob}%")
                 if ml_potential is not None:
                     ml_parts.append(f"🌱 **潜力**{ml_potential}%")
                 ml_gain = ml_result.get('gain')
@@ -721,7 +721,7 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             if row2_parts:
                 lines.append("  ↳ " + "  ".join(row2_parts))
 
-            # 第3行：动能 + 主力资金 + 大单 + ML达标/潜力 + 规则匹配度
+            # 第3行：动能 + 主力资金 + 大单 + ML胜率/潜力 + 规则匹配度
             rule = _calc_rule_match(period, d, analysis)
             row3_parts = [
                 f"动能{rule['momentum']:.0f}",
@@ -732,7 +732,7 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             ml_potential = s.get('ml_potential')
             ml_gain = s.get('ml_gain')
             if ml_prob is not None:
-                row3_parts.append(f"🤖达标{ml_prob}%")
+                row3_parts.append(f"🤖胜率{ml_prob}%")
             if ml_potential is not None:
                 row3_parts.append(f"🌱潜力{ml_potential}%")
             if ml_gain is not None:

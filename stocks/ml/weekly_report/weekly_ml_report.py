@@ -316,11 +316,11 @@ def _get_predict_potential(r: dict) -> str:
     if val is None or val == "":
         return "-"
     val = float(val)
-    if val >= 60:
+    if val >= 30:
         return f"{E_FIRE} **{val:.1f}%**"
-    elif val >= 50:
+    elif val >= 25:
         return f"{E_RED} **{val:.1f}%**"
-    elif val >= 40:
+    elif val >= 20:
         return f"{E_YELLOW} {val:.1f}%"
     else:
         return f"{E_WHITE} {val:.1f}%"
@@ -378,9 +378,9 @@ def _get_ml_summary(r: dict) -> str:
         prob_str = "-"
     else:
         prob_val = float(prob)
-        if prob_val >= 60:
+        if prob_val >= 28:
             prob_str = f"<font color=\"#d32f2f\"><b>{prob_val:.1f}%</b></font>"
-        elif prob_val >= 50:
+        elif prob_val >= 25:
             prob_str = f"<font color=\"#f57c00\">{prob_val:.1f}%</font>"
         else:
             prob_str = f"{prob_val:.1f}%"
@@ -389,9 +389,9 @@ def _get_ml_summary(r: dict) -> str:
         potential_str = "-"
     else:
         potential_val = float(potential)
-        if potential_val >= 60:
+        if potential_val >= 30:
             potential_str = f"<font color=\"#d32f2f\"><b>{potential_val:.1f}%</b></font>"
-        elif potential_val >= 50:
+        elif potential_val >= 25:
             potential_str = f"<font color=\"#f57c00\">{potential_val:.1f}%</font>"
         else:
             potential_str = f"{potential_val:.1f}%"
@@ -433,7 +433,7 @@ def _weekday_cn(date_str: str) -> str:
 
 def _render_table(records: list[dict]) -> str:
     lines = []
-    lines.append("| # | 股票 | 信号 | 价/高 | 资金 | 大单 | 因子 | ML(达/潜/涨) | 规则 |")
+    lines.append("| # | 股票 | 信号 | 价/高 | 资金 | 大单 | 因子 | ML(胜/潜/涨) | 规则 |")
     lines.append("|:---:|:----|:---:|:----:|:----:|:----:|:----:|:----:|:---:|")
     for i, r in enumerate(records, 1):
         code = r.get("code", "")
@@ -492,8 +492,8 @@ def generate_report(
     lines.append("| 量 | 量比，当前成交量相对近20日均量的倍数 | >=1.5 | 粗体>=1.5 橙色>=1.2 | `an_market_pos_vol_ratio` |")
     lines.append("| 空 | 空间/预期涨幅，即当前价到系统目标价的距离 | >=15% | 粗体>=15% 橙色>=10% | `an_technical_expected_gain_pct` |")
     lines.append("| 达 | 到达概率评分，衡量目标价短期可达性 | >=70 | 粗体>=70 橙色>=60 | `an_success_rate_dim_reach_prob` |")
-    lines.append("| ML达 | 短线达标模型概率，预测5日内能否触达目标价 | - | 🔥>=60% 🔴>=50% 🟡>=40% ⚪<40% | `ml_predict_prob` |")
-    lines.append("| ML潜 | 潜力模型概率，当前表示5日内最大涨幅>=8%的概率 | - | 🔥>=60% 🔴>=50% 🟡>=40% ⚪<40% | `ml_predict_potential` |")
+    lines.append("| ML胜 | 短线胜率模型概率，预测持有5日净赚>5%。注意：高分段样本少不单调，28分附近最可信，40+反而不稳 | - | 🔥>=28% 🔴>=25% 🟡>=22% ⚪<22% | `ml_predict_prob` |")
+    lines.append("| ML潜 | 大涨潜力模型概率，预测5日内最大涨幅>=15%（分数越高越准） | - | 🔥>=30% 🔴>=25% 🟡>=20% ⚪<20% | `ml_predict_potential` |")
     lines.append("| ML涨 | 涨幅排序模型分数（全特征、不校准），预测5日内涨≥8%概率，≥67为Top20%信号 | - | 🔥>=67 ⭐>=60 💡<60 | `ml_predict_gain` |")
     lines.append("| 规则 | 10条V2规则匹配百分比 | 100%为满分 | 🔥100%满分 🔴>=86% 🟡>=71% ⚪<71% | `calc_v2_rule_match()` |")
     lines.append("")
@@ -615,14 +615,14 @@ def generate_report(
     lines.append("- `空`：空间/预期涨幅，粗体表示 >=15%")
     lines.append("- `达`：到达概率评分，粗体表示 >=70")
     lines.append("")
-    lines.append("**ML概率**")
+    lines.append("**ML胜率概率**（持有5日净赚>5%，28分附近最可信，40+样本少不稳）")
     lines.append("")
     lines.append("| 标记 | 含义 |")
     lines.append("|:----:|:----:|")
-    lines.append(f"| {E_FIRE} | >= 10% |")
-    lines.append(f"| {E_RED} | >= 5% |")
-    lines.append(f"| {E_YELLOW} | >= 0% |")
-    lines.append(f"| {E_GREEN} | < 0% |")
+    lines.append(f"| {E_FIRE} | >= 28% |")
+    lines.append(f"| {E_RED} | >= 25% |")
+    lines.append(f"| {E_YELLOW} | >= 22% |")
+    lines.append(f"| {E_WHITE} | < 22% |")
     lines.append("")
     lines.append("</details>")
     lines.append("")
@@ -963,16 +963,16 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
   </div>
   <div class="legend">
     <span class="leg" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe">
-      <span class="leg-dot" style="background:#2563eb"></span>ML ≥ 55%
+      <span class="leg-dot" style="background:#2563eb"></span>ML ≥ 28%
     </span>
     <span class="leg" style="background:#f0fdf4;color:#065f46;border-color:#bbf7d0">
-      <span class="leg-dot" style="background:#059669"></span>ML ≥ 50%
+      <span class="leg-dot" style="background:#059669"></span>ML ≥ 25%
     </span>
     <span class="leg" style="background:#fffbeb;color:#92400e;border-color:#fde68a">
-      <span class="leg-dot" style="background:#d97706"></span>ML ≥ 45%
+      <span class="leg-dot" style="background:#d97706"></span>ML ≥ 22%
     </span>
     <span class="leg" style="background:#f9fafb;color:#6b7280;border-color:#e5e7eb">
-      <span class="leg-dot" style="background:#bbb"></span>&lt; 45%
+      <span class="leg-dot" style="background:#bbb"></span>&lt; 22%
     </span>
     <span class="leg" style="background:#fef3c7;color:#92400e;border-color:#fbbf24">
       连续 = 多日重复出现
@@ -1011,7 +1011,7 @@ function fmtCap(v) {{
 }}
 
 function mlCls(v) {{
-  return v >= 55 ? 'c-blue' : v >= 50 ? 'c-teal' : v >= 45 ? 'c-amber' : 'c-gray';
+  return v >= 28 ? 'c-blue' : v >= 25 ? 'c-teal' : v >= 22 ? 'c-amber' : 'c-gray';
 }}
 function momCls(v) {{
   return v >= 100 ? 'hot' : v >= 80 ? 'warm' : v >= 60 ? 'ok' : 'dim';
@@ -1077,7 +1077,7 @@ function renderGrid(day) {{
         </div>
         <div class="ml-box">
           <div class="ml-num ${{cls(s.ml)}}">${{s.ml}}%</div>
-          <div class="ml-pot${{s.pot !== null && s.pot > 60 ? ' has' : ''}}">潜 ${{s.pot !== null ? s.pot + '%' : '—'}}</div>
+          <div class="ml-pot${{s.pot !== null && s.pot > 30 ? ' has' : ''}}">潜 ${{s.pot !== null ? s.pot + '%' : '—'}}</div>
           <div class="ml-gain${{s.gain !== null && s.gain >= 67 ? ' hot' : (s.gain !== null && s.gain >= 60 ? ' warm' : '')}}" style="font-size:10px;color:${{s.gain !== null && s.gain >= 67 ? '#dc2626' : (s.gain !== null && s.gain >= 60 ? '#d97706' : '#bbb')}};margin-top:2px;font-weight:${{s.gain !== null && s.gain >= 67 ? '700' : '400'}}">涨 ${{s.gain !== null ? Math.round(s.gain) : '—'}}</div>
         </div>
       </div>
@@ -1195,7 +1195,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="ML预测概率周报生成器")
     parser.add_argument("--threshold", "-t", type=float, default=None,
-                        help="ml_predict_prob 筛选阈值（默认交互输入，回车默认40）")
+                        help="ml_predict_prob 筛选阈值（默认交互输入，回车默认25）")
     parser.add_argument("--mode", "-m", choices=["overwrite", "new"], default=None,
                         help="写入模式：overwrite=覆盖（默认）, new=删除旧文件再写")
     args = parser.parse_args()
@@ -1220,15 +1220,15 @@ def main():
     if args.threshold is not None:
         threshold = args.threshold
     else:
-        raw = _safe_input("[?] 请输入 ml_predict_prob 筛选阈值（直接回车默认 40）: ").strip()
+        raw = _safe_input("[?] 请输入 ml_predict_prob 筛选阈值（直接回车默认 25）: ").strip()
         if raw == "":
-            threshold = 40.0
+            threshold = 25.0
         else:
             try:
                 threshold = float(raw)
             except ValueError:
-                _safe_print("[!] 输入无效，使用默认值 40")
-                threshold = 40.0
+                _safe_print("[!] 输入无效，使用默认值 25")
+                threshold = 25.0
 
     _safe_print(f"[*] 筛选阈值: ml_predict_prob >= {threshold}%")
 

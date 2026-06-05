@@ -26,10 +26,14 @@ OUTCOME_DAYS = 5
 # 训练所需的最少已标记样本数
 MIN_TRAIN_SAMPLES = 45
 
-# 十倍/百倍早期潜力模型：在现有5日样本内，先学习“高弹性爆发”标签。
+# 十倍/百倍早期潜力模型：在现有5日样本内，学习“大涨爆发”标签。
 # 当前数据源没有财务/市值/估值，不能直接学习真正10倍/100倍；
-# 先用“5日内最大涨幅 >= 8%”作为早期可验证代理标签。
-POTENTIAL_GAIN_THRESHOLD_PCT = 8.0
+# 用“5日内最大涨幅 >= 15%”作为大涨代理标签（原 8% 与涨幅模型重复，已上调以做差异化）。
+POTENTIAL_GAIN_THRESHOLD_PCT = 15.0
+
+# 短线达标模型标签门槛：原“是否摸到目标价”是橡皮尺（每只票及格线忽高忽低，模型学不准），
+# 改用统一口径——信号后 OUTCOME_DAYS 个交易日持有到期的净收益是否 > 5%（真落袋赚到）。
+SHORTLINE_PROFIT_THRESHOLD_PCT = 5.0
 
 # 涨幅模型：预测5日内最大涨幅 ≥8% 的概率（全特征、不校准、纯排序）
 GAIN_THRESHOLD_PCT = 8.0
@@ -374,48 +378,20 @@ def train() -> Optional[Any]:
     # 时间序列切分需要先按日期升序排序
     labeled.sort(key=lambda r: r.get('date', ''))
 
-    # 排除元信息和结果字段，只保留数值型特征
+    # 全量特征（与涨幅模型一致）：保留 sr_score 等派生字段。
+    # 实测在“持有净赚>5%”标签下，全量特征比砍掉派生字段准得多（Top10% 命中 1.78x vs 1.27x），
+    # 故只排除元信息、结果字段、旧模型预测快照，以及与 sc_close/目标价完全重复的字段。
     exclude = {
         'date', 'code', 'name', 'period', 'signal_type', 'timestamp',
         'gold_cross_date', 'confirm_date', 'verdict', 'industry',
-        'sr_grade', 'exit_date', 'reached_target', 'actual_return', 'exit_price', 'max_high', 'max_gain_pct', 'max_gain_pct',
-        # 排除综合评分/加权合成字段（它们是子参数的二次加工，会干扰模型对底层因子的学习）
-        'sr_score',                         # = an_success_rate_score 的冗余快照
-        'an_success_rate_score',            # 6个子维度的加权求和
-        'an_success_rate_dim_reach_prob',   # 多因子加权合成的到达概率
-        'an_success_rate_dim_rr',           # expected_gain / stop_loss 的分档映射，与子字段重复
-        'an_success_rate_dim_momentum',     # trend_score * 0.7 + macd_strength * 0.3
-        'an_success_rate_dim_rs',           # 直接等于 market_pos.rs_score，完全重复
-        'an_trend_score',                   # ma_score*0.3 + vp_score*0.4 + macd_score*0.3
-        'an_market_pos_score',              # rs_score*0.5 + vr_score*0.5
-        'an_market_pos_rs_score',           # relative_strength 的分档打分，与原始值重复
-        'an_market_pos_vr_score',           # vol_ratio 的分档打分，与原始值重复
-        # 排除派生/冗余的技术指标字段
-        'an_technical_expected_gain_pct',   # (target - price) / price，由子字段可推出
-        'an_technical_stop_loss_pct',       # (stop - price) / price，由子字段可推出
-        'an_technical_space_ok',            # expected_gain >= 10 的布尔映射
-        'an_technical_target_price',        # 压力位/ATR/斐波那契三法取中位数，整合结果
-        'target_price',                     # 同上，record层冗余快照
-        'an_technical_ma20',                # 与 sc_ma20 重复
-        # 排除重复的价格字段（同一个值存了多份，只保留一个）
-        'close',                            # 与 sc_close 相同
-        'an_quote_price',                   # 与 sc_close 相同
-        'an_technical_current_price',       # 与 sc_close 相同
-        'stop_loss',                        # 与 an_technical_stop_loss 相同
-        # 排除ML预测快照字段（仅供查阅，不参与训练）
-        'ml_predict_prob',                  # 当时的ML预测概率
-        'ml_predict_gain',                  # 当时的ML预测涨幅
-        'ml_top3_features',                 # 当时模型的TOP3特征名
-        # 排除高度冗余的特征（实测相关系数 > 0.99，会稀释特征重要性）
-        'sc_ma30',                          # 与 sc_ma20 相关系数 0.9998
-        'sc_first_double_price',            # 与 sc_close 相关系数 0.9995
-        'an_quote_high',                    # 与 sc_close 高度相关
-        'an_quote_low',                     # 与 sc_close 高度相关
-        'an_quote_open',                    # 与 sc_close 高度相关
-        'an_quote_pre_close',               # 与 sc_close 高度相关
-        'an_technical_method_targets_压力位法',   # 与 target_price 高度相关（合成时使用）
-        'an_technical_method_targets_ATR通道法',  # 与 target_price 高度相关（合成时使用）
-        'an_technical_method_targets_斐波那契',   # 与 target_price 高度相关（合成时使用）
+        'sr_grade', 'exit_date',
+        'reached_target', 'actual_return', 'exit_price', 'max_high', 'max_gain_pct',
+        'ml_predict_prob', 'ml_predict_gain', 'ml_predict_potential', 'ml_top3_features',
+        'close', 'an_quote_price', 'an_technical_current_price',
+        'an_technical_ma20', 'stop_loss',
+        'an_technical_method_targets_压力位法',
+        'an_technical_method_targets_ATR通道法',
+        'an_technical_method_targets_斐波那契',
     }
     feature_fields = sorted({
         k for r in labeled for k, v in r.items()
@@ -425,9 +401,15 @@ def train() -> Optional[Any]:
     logger.info(f"训练样本: {len(labeled)} 条，特征: {len(feature_fields)} 个")
 
     X = np.array([[r.get(f, 0) or 0 for f in feature_fields] for r in labeled], dtype=float)
-    y = np.array([r['reached_target'] for r in labeled], dtype=int)
+    # 标签：持有到期(第 OUTCOME_DAYS 个交易日收盘)净收益 > SHORTLINE_PROFIT_THRESHOLD_PCT%
+    # 取代原 reached_target(是否摸到目标价)，统一及格线，让高分更可信。
+    _profit_thr = SHORTLINE_PROFIT_THRESHOLD_PCT / 100.0
+    y = np.array([
+        1 if (r.get('actual_return') or 0) > _profit_thr else 0
+        for r in labeled
+    ], dtype=int)
 
-    logger.info(f"正样本比例(达标): {y.mean():.2%}")
+    logger.info(f"正样本比例(持有{OUTCOME_DAYS}日净赚>{SHORTLINE_PROFIT_THRESHOLD_PCT:.0f}%): {y.mean():.2%}")
 
     # 时间序列切分：前80%训练，后20%测试，模拟"用历史预测未来"
     n_split = int(len(labeled) * 0.8)
@@ -492,7 +474,7 @@ def train() -> Optional[Any]:
     joblib.dump(bundle, MODEL_FILE)
     logger.info(f"模型已保存: {MODEL_FILE}")
 
-    # 同时训练十倍/百倍早期潜力模型（用高弹性爆发作为当前可验证代理标签）
+    # 同时训练大涨潜力模型（标签：5日内最大涨幅>=15%）
     potential_bundle = _train_potential_model(labeled, feature_fields)
 
     # 训练涨幅排序模型（全特征、不校准、标签统一为 ≥8%）
@@ -909,27 +891,33 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
     sample_count = bundle['sample_count']
     importance  = bundle['importance']
 
+    # 短线胜率模型的标签口径：持有到期净收益 > SHORTLINE_PROFIT_THRESHOLD_PCT%
+    _ptr = SHORTLINE_PROFIT_THRESHOLD_PCT / 100.0
+    def _is_win(r):
+        return 1 if (r.get('actual_return') or 0) > _ptr else 0
+
     lines = []
     lines.append(f"# ML模型分析报告")
     lines.append(f"\n> **训练日期**: {train_date}（每周一自动更新）  ")
     lines.append(f"> **共用样本数**: {sample_count}（已回填实际涨跌结果的历史信号数量）  ")
     lines.append(
-        f"> 本系统包含两个独立模型：**短线达标分类模型**（预测能否触达目标价）和 "
-        f"**十倍/百倍早期潜力模型**（预测高弹性爆发概率，当前代理标签为5日内最大涨幅>={POTENTIAL_GAIN_THRESHOLD_PCT:.1f}%）"
+        f"> 本系统包含三个独立模型：**短线胜率模型**（预测持有{OUTCOME_DAYS}日净赚>{SHORTLINE_PROFIT_THRESHOLD_PCT:.0f}%）、"
+        f"**大涨潜力模型**（预测{OUTCOME_DAYS}日内最大涨幅>={POTENTIAL_GAIN_THRESHOLD_PCT:.0f}%）和 "
+        f"**涨幅排序模型**（预测{OUTCOME_DAYS}日内最大涨幅>={GAIN_THRESHOLD_PCT:.0f}%，本次不改动）"
     )
 
     # ── 样本概况 ──
     lines.append(f"\n---\n## 一、样本概况")
 
     lines.append(f"\n### 按周期分布")
-    lines.append("| 周期 | 总信号 | 达标数 | 达标率 | 高弹性数 | 高弹性率 |")
+    lines.append(f"| 周期 | 总信号 | 净赚数 | 净赚率(>{SHORTLINE_PROFIT_THRESHOLD_PCT:.0f}%) | 大涨数 | 大涨率(>={POTENTIAL_GAIN_THRESHOLD_PCT:.0f}%) |")
     lines.append("|------|--------|--------|--------|----------|----------|")
     from collections import defaultdict
     period_stats = defaultdict(lambda: {'total': 0, 'hit': 0, 'potential': 0})
     for r in labeled:
         p = r.get('period', '?')
         period_stats[p]['total'] += 1
-        period_stats[p]['hit'] += r.get('reached_target', 0)
+        period_stats[p]['hit'] += _is_win(r)
         period_stats[p]['potential'] += 1 if float(r.get('max_gain_pct') or 0) >= POTENTIAL_GAIN_THRESHOLD_PCT else 0
     for p, s in sorted(period_stats.items()):
         rate = s['hit'] / s['total'] if s['total'] else 0
@@ -940,14 +928,14 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
     lines.append(f"\n### 按信号类型分布")
     lines.append("信号类型说明：**筑底**=底部企稳反弹、**突破**=放量突破压力位、**严格**=金叉严格条件全满足、**普通**=金叉基本条件满足")
     lines.append("")
-    lines.append("| 信号类型 | 总信号 | 达标数 | 达标率 | 高弹性数 | 高弹性率 |")
+    lines.append(f"| 信号类型 | 总信号 | 净赚数 | 净赚率(>{SHORTLINE_PROFIT_THRESHOLD_PCT:.0f}%) | 大涨数 | 大涨率(>={POTENTIAL_GAIN_THRESHOLD_PCT:.0f}%) |")
     lines.append("|----------|--------|--------|--------|----------|----------|")
     type_order = ['筑底', '突破', '严格', '普通']
     type_stats = defaultdict(lambda: {'total': 0, 'hit': 0, 'potential': 0})
     for r in labeled:
         t = r.get('signal_type', '?')
         type_stats[t]['total'] += 1
-        type_stats[t]['hit'] += r.get('reached_target', 0)
+        type_stats[t]['hit'] += _is_win(r)
         type_stats[t]['potential'] += 1 if float(r.get('max_gain_pct') or 0) >= POTENTIAL_GAIN_THRESHOLD_PCT else 0
     shown = []
     for t in type_order:
@@ -964,20 +952,21 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
             lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} | {s['potential']} | {potential_rate:.1%} |")
 
     # ── 分类模型 ──
-    lines.append(f"\n---\n## 二、短线达标分类模型")
-    lines.append(f"\n任务：预测信号发出后{OUTCOME_DAYS}个交易日内，最高价能否触达目标价。")
+    lines.append(f"\n---\n## 二、短线胜率模型")
+    lines.append(f"\n任务：预测信号发出后{OUTCOME_DAYS}个交易日，持有到期(收盘价)净收益能否 > {SHORTLINE_PROFIT_THRESHOLD_PCT:.0f}%。")
+    lines.append(f"（原“是否摸到目标价”因每只票目标价宽窄不一、标签噪声大，已弃用）")
     lines.append(f"- **训练集准确率**: {train_acc:.2%}  |  **测试集准确率**: {test_acc:.2%}")
 
     if bundle.get('split_method') == 'time_series':
         lines.append(f"- **切分方式**: 时间序列切分（前80%训练 / 后20%测试，无未来信息泄漏）")
         lines.append(f"- **训练截止**: {bundle.get('train_end_date', '?')}  |  **测试起始**: {bundle.get('test_start_date', '?')}")
     if bundle.get('calibrated'):
-        lines.append(f"- **概率校准**: 已使用 isotonic 5折交叉校准，模型输出概率 ≈ 实际达标率")
+        lines.append(f"- **概率校准**: 已使用 isotonic 5折交叉校准，模型输出概率 ≈ 实际净赚率")
         lines.append("")
         lines.append(
-            f"> 概率含义：短线达标概率衡量的是“先赚确定性的钱”。"
-            f"整体基准达标率约 {sum(r.get('reached_target',0) for r in labeled)/len(labeled):.1%}，"
-            f"实战建议重点关注概率 >= 40% 的信号。"
+            f"> 概率含义：短线胜率概率衡量的是“持有到期能不能落袋赚到钱”。"
+            f"整体基准净赚率约 {sum(_is_win(r) for r in labeled)/len(labeled):.1%}，"
+            f"高分越靠前越可信（具体可信分数线见训练日志，每周自动更新）。"
         )
 
     prob_bucket_stats = bundle.get('prob_bucket_stats', [])
@@ -994,12 +983,12 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
     for i, (fname, imp) in enumerate(importance[:20], 1):
         lines.append(f"| {i} | `{fname}` | {imp:.4f} |")
 
-    lines.append(f"\n### 达标 vs 未达标信号特征对比")
+    lines.append(f"\n### 净赚 vs 未净赚信号特征对比")
     import numpy as np
-    hit_records  = [r for r in labeled if r.get('reached_target') == 1]
-    miss_records = [r for r in labeled if r.get('reached_target') == 0]
+    hit_records  = [r for r in labeled if _is_win(r) == 1]
+    miss_records = [r for r in labeled if _is_win(r) == 0]
     top_features = [f for f, _ in importance[:15]]
-    lines.append("| 特征名 | 达标均值 | 未达标均值 | 差异 |")
+    lines.append("| 特征名 | 净赚均值 | 未净赚均值 | 差异 |")
     lines.append("|--------|----------|------------|------|")
     for fname in top_features:
         hit_vals  = [r.get(fname, 0) or 0 for r in hit_records]
@@ -1007,28 +996,29 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
         hit_mean  = np.mean(hit_vals)  if hit_vals  else 0
         miss_mean = np.mean(miss_vals) if miss_vals else 0
         diff      = hit_mean - miss_mean
-        direction = "↑达标更高" if diff > 0 else "↓未达标更高"
+        direction = "↑净赚更高" if diff > 0 else "↓未净赚更高"
         lines.append(f"| `{fname}` | {hit_mean:.3f} | {miss_mean:.3f} | {diff:+.3f} {direction} |")
 
     # ── 十倍/百倍早期潜力模型 ──
     if potential_bundle:
-        lines.append(f"\n---\n## 三、十倍/百倍早期潜力模型")
+        lines.append(f"\n---\n## 三、大涨潜力模型")
         lines.append(
-            f"\n任务：在当前数据源较少的阶段，先学习“高弹性爆发”而不直接宣称真实十倍/百倍。"
-            f"标签为：信号发出后{OUTCOME_DAYS}个交易日内最大涨幅 >= {potential_bundle.get('gain_threshold_pct', POTENTIAL_GAIN_THRESHOLD_PCT):.1f}%。"
+            f"\n任务：预测信号发出后{OUTCOME_DAYS}个交易日内最大涨幅 >= "
+            f"{potential_bundle.get('gain_threshold_pct', POTENTIAL_GAIN_THRESHOLD_PCT):.1f}%（抓“大涨”，"
+            f"门槛已从 8% 上调到 15% 以与涨幅模型差异化）。"
         )
         lines.append(
-            f"\n作用：给短线达标模型做辅助。短线模型负责确定性，潜力模型负责空间。"
-            f"当短线概率一般但潜力概率高时，表示它可能不是马上涨，但具备更大的后续弹性；"
-            f"当短线概率和潜力概率同时高时，才是“看长做短”的优先信号。"
+            f"\n作用：给短线胜率模型做辅助。胜率模型负责“能不能落袋赚钱”，潜力模型负责“有没有大涨空间”。"
+            f"当胜率一般但潜力高时，表示它可能不是稳赚但弹性大；"
+            f"当胜率和潜力同时高时，是“看长做短”的优先信号。"
         )
         lines.append(f"- **样本数**: {potential_bundle.get('sample_count', '?')}")
-        lines.append(f"- **高弹性基准率**: {potential_bundle.get('positive_rate', 0):.1%}")
+        lines.append(f"- **大涨基准率**: {potential_bundle.get('positive_rate', 0):.1%}")
         lines.append(f"- **训练集准确率**: {potential_bundle.get('train_acc', 0):.2%}  |  **测试集准确率**: {potential_bundle.get('test_acc', 0):.2%}")
         p_stats = potential_bundle.get('prob_bucket_stats', [])
         if p_stats:
             lines.append(f"\n### 潜力概率桶命中率")
-            lines.append("| 潜力概率区间 | 信号数 | 高弹性命中数 | 命中率 |")
+            lines.append("| 潜力概率区间 | 信号数 | 大涨命中数 | 命中率 |")
             lines.append("|--------------|--------|--------------|--------|")
             for s in p_stats:
                 lines.append(f"| {s['label']} | {s['total']} | {s['hit']} | {s['hit_rate']:.1%} |")
@@ -1045,7 +1035,7 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
         top_p_features = [f for f, _ in p_imp[:15]]
         if top_p_features:
             lines.append(f"\n### 高弹性 vs 普通信号特征对比")
-            lines.append("| 特征名 | 高弹性均值 | 普通均值 | 差异 |")
+            lines.append("| 特征名 | 大涨均值 | 普通均值 | 差异 |")
             lines.append("|--------|------------|----------|------|")
             for fname in top_p_features:
                 high_vals = [r.get(fname, 0) or 0 for r in high_records]
@@ -1053,7 +1043,7 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
                 high_mean = np.mean(high_vals) if high_vals else 0
                 low_mean = np.mean(low_vals) if low_vals else 0
                 diff = high_mean - low_mean
-                direction = "↑高弹性更高" if diff > 0 else "↓普通更高"
+                direction = "↑大涨更高" if diff > 0 else "↓普通更高"
                 lines.append(f"| `{fname}` | {high_mean:.3f} | {low_mean:.3f} | {diff:+.3f} {direction} |")
 
     # ── 涨幅排序模型 ──
@@ -1096,12 +1086,12 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
     # ── 结论 ──
     lines.append(f"\n---\n## 五、结论摘要")
     top3 = [f for f, _ in importance[:3]]
-    lines.append(f"- 短线达标模型最关键的3个特征: `{'` / `'.join(top3)}`")
-    overall_rate = sum(r.get('reached_target', 0) for r in labeled) / len(labeled)
+    lines.append(f"- 短线胜率模型最关键的3个特征: `{'` / `'.join(top3)}`")
+    overall_rate = sum(_is_win(r) for r in labeled) / len(labeled)
     potential_rate = sum(1 for r in labeled if float(r.get('max_gain_pct') or 0) >= POTENTIAL_GAIN_THRESHOLD_PCT) / len(labeled)
-    lines.append(f"- 短线整体达标率: {overall_rate:.1%}（短线确定性基准线）")
-    lines.append(f"- 高弹性整体命中率: {potential_rate:.1%}（潜力模型基准线）")
-    lines.append(f"- 使用方式：优先选择 `短线达标概率高 + 潜力概率高`；若短线一般但潜力高，可降低仓位观察，等待分类模型或技术信号二次确认。")
+    lines.append(f"- 短线整体净赚率(>{SHORTLINE_PROFIT_THRESHOLD_PCT:.0f}%): {overall_rate:.1%}（短线确定性基准线）")
+    lines.append(f"- 大涨整体命中率(>={POTENTIAL_GAIN_THRESHOLD_PCT:.0f}%): {potential_rate:.1%}（潜力模型基准线）")
+    lines.append(f"- 使用方式：优先选择 `短线胜率高 + 大涨潜力高`；若胜率一般但潜力高，可降低仓位观察，等待二次确认。")
     lines.append(f"- 当前限制：尚未接入市值、估值、财务成长、ROE、现金流、研发和机构持仓，因此该模型是“十倍股早期线索模型”，不是完整基本面十倍股模型。")
 
     with open(report_file, 'w', encoding='utf-8') as f:
