@@ -1,7 +1,7 @@
 # DeepVCode clipboard
 .deepvcode/clipboard/
 __pycache__/  
-.deepvcode/  
+.easycode/  
 .opencode/  
 # Weekly ML report  
 stocks/ml/weekly_report/weekly_ml_report.md  
