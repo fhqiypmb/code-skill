@@ -36,6 +36,32 @@ DATA_FILE = os.path.join(_ML_DIR, "shadow_data.json")
 HOLIDAYS_FILE = os.path.join(_STOCKS_DIR, "stock_monitor", "holidays.json")
 OUTPUT_FILE = os.path.join(_SCRIPT_DIR, "weekly_ml_report.md")
 OUTPUT_HTML_FILE = os.path.join(_SCRIPT_DIR, "weekly_ml_report.html")
+THRESHOLDS_FILE = os.path.join(_ML_DIR, "ml_thresholds.json")
+
+
+# ─────────────────── ML 染色阈值（训练时由 shadow_learner 导出，缺失则回退默认） ───────────────────
+# 默认值是 ml_thresholds.json 不存在时的兜底，与历史写死值保持一致，保证旧环境不报错。
+_DEFAULT_THRESHOLDS = {
+    "win":       {"baseline": 17.5, "high": 28.0, "kind": "prob"},
+    "potential": {"baseline": 10.2, "high": 30.0, "kind": "prob"},
+    "gain":      {"baseline": 23.6, "top20": 67.0, "top30": 60.0, "kind": "score"},
+}
+
+
+def _load_thresholds() -> dict:
+    """读取训练导出的染色阈值；文件缺失或损坏时回退默认值。"""
+    merged = {k: dict(v) for k, v in _DEFAULT_THRESHOLDS.items()}
+    try:
+        if os.path.exists(THRESHOLDS_FILE):
+            with open(THRESHOLDS_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            for key in ("win", "potential", "gain"):
+                if isinstance(loaded.get(key), dict):
+                    merged[key].update(loaded[key])
+            merged["train_date"] = loaded.get("train_date", "")
+    except Exception as e:
+        _safe_print(f"[!] 阈值文件读取失败，使用默认值: {e}")
+    return merged
 
 # ─────────────────── Emoji 定义 ───────────────────
 E_FIRE      = "\U0001f525"   # 🔥
@@ -72,6 +98,26 @@ def _safe_input(prompt: str) -> str:
         return input(prompt)
     except UnicodeEncodeError:
         return input(prompt.encode("gbk", "replace").decode("gbk"))
+
+
+# 模块级染色阈值（依赖 _safe_print，故在其后初始化）
+THRESHOLDS = _load_thresholds()
+
+
+def _prob_cuts(key: str) -> tuple[float, float, float]:
+    """校准概率型模型(win/potential)的四档色阈：(fire, red, yellow)。
+    fire=高分线；red=基准(正期望线)；yellow=基准×0.8。低于 yellow 为 white。
+    """
+    t = THRESHOLDS.get(key, {})
+    base = float(t.get("baseline", 0) or 0)
+    high = float(t.get("high", 0) or 0)
+    return (high, base, base * 0.8)
+
+
+def _gain_cuts() -> tuple[float, float]:
+    """涨幅排序分的两档色阈：(fire=Top20线, warm=Top30线)。"""
+    t = THRESHOLDS.get("gain", {})
+    return (float(t.get("top20", 67) or 67), float(t.get("top30", 60) or 60))
 
 
 # ─────────────────── 交易日计算 ───────────────────
@@ -316,11 +362,12 @@ def _get_predict_potential(r: dict) -> str:
     if val is None or val == "":
         return "-"
     val = float(val)
-    if val >= 30:
+    fire, red, yellow = _prob_cuts("potential")
+    if val >= fire:
         return f"{E_FIRE} **{val:.1f}%**"
-    elif val >= 25:
+    elif val >= red:
         return f"{E_RED} **{val:.1f}%**"
-    elif val >= 20:
+    elif val >= yellow:
         return f"{E_YELLOW} {val:.1f}%"
     else:
         return f"{E_WHITE} {val:.1f}%"
@@ -373,36 +420,39 @@ def _get_factor_summary(r: dict) -> str:
 
 
 def _get_ml_summary(r: dict) -> str:
+    win_fire, win_red, _win_yellow = _prob_cuts("win")
     prob = r.get("ml_predict_prob", 0)
     if prob is None or prob == "":
         prob_str = "-"
     else:
         prob_val = float(prob)
-        if prob_val >= 28:
+        if prob_val >= win_fire:
             prob_str = f"<font color=\"#d32f2f\"><b>{prob_val:.1f}%</b></font>"
-        elif prob_val >= 25:
+        elif prob_val >= win_red:
             prob_str = f"<font color=\"#f57c00\">{prob_val:.1f}%</font>"
         else:
             prob_str = f"{prob_val:.1f}%"
+    pot_fire, pot_red, _pot_yellow = _prob_cuts("potential")
     potential = r.get("ml_predict_potential")
     if potential is None or potential == "":
         potential_str = "-"
     else:
         potential_val = float(potential)
-        if potential_val >= 30:
+        if potential_val >= pot_fire:
             potential_str = f"<font color=\"#d32f2f\"><b>{potential_val:.1f}%</b></font>"
-        elif potential_val >= 25:
+        elif potential_val >= pot_red:
             potential_str = f"<font color=\"#f57c00\">{potential_val:.1f}%</font>"
         else:
             potential_str = f"{potential_val:.1f}%"
+    gain_fire, gain_warm = _gain_cuts()
     gain = r.get("ml_predict_gain")
     if gain is None or gain == "":
         gain_str = "-"
     else:
         gain_val = float(gain)
-        if gain_val >= 67:
+        if gain_val >= gain_fire:
             gain_str = f"<font color=\"#d32f2f\"><b>{gain_val:.0f}</b></font>"
-        elif gain_val >= 60:
+        elif gain_val >= gain_warm:
             gain_str = f"<font color=\"#f57c00\">{gain_val:.0f}</font>"
         else:
             gain_str = f"{gain_val:.0f}"
@@ -492,9 +542,24 @@ def generate_report(
     lines.append("| 量 | 量比，当前成交量相对近20日均量的倍数 | >=1.5 | 粗体>=1.5 橙色>=1.2 | `an_market_pos_vol_ratio` |")
     lines.append("| 空 | 空间/预期涨幅，即当前价到系统目标价的距离 | >=15% | 粗体>=15% 橙色>=10% | `an_technical_expected_gain_pct` |")
     lines.append("| 达 | 到达概率评分，衡量目标价短期可达性 | >=70 | 粗体>=70 橙色>=60 | `an_success_rate_dim_reach_prob` |")
-    lines.append("| ML胜 | 短线胜率模型概率，预测持有5日净赚>5%。注意：高分段样本少不单调，28分附近最可信，40+反而不稳 | - | 🔥>=28% 🔴>=25% 🟡>=22% ⚪<22% | `ml_predict_prob` |")
-    lines.append("| ML潜 | 大涨潜力模型概率，预测5日内最大涨幅>=15%（分数越高越准） | - | 🔥>=30% 🔴>=25% 🟡>=20% ⚪<20% | `ml_predict_potential` |")
-    lines.append("| ML涨 | 涨幅排序模型分数（全特征、不校准），预测5日内涨≥8%概率，≥67为Top20%信号 | - | 🔥>=67 ⭐>=60 💡<60 | `ml_predict_gain` |")
+    win_fire, win_red, win_yellow = _prob_cuts("win")
+    pot_fire, pot_red, pot_yellow = _prob_cuts("potential")
+    gain_fire, gain_warm = _gain_cuts()
+    win_base = THRESHOLDS.get("win", {}).get("baseline", 0)
+    pot_base = THRESHOLDS.get("potential", {}).get("baseline", 0)
+    gain_base = THRESHOLDS.get("gain", {}).get("baseline", 0)
+    lines.append(
+        f"| ML胜 | 短线胜率模型概率，预测持有5日净赚>5%（基准{win_base:.1f}%，已校准，高于基准即正期望） | - "
+        f"| 🔥>={win_fire:.0f}% 🔴>={win_red:.0f}% 🟡>={win_yellow:.0f}% ⚪<{win_yellow:.0f}% | `ml_predict_prob` |"
+    )
+    lines.append(
+        f"| ML潜 | 大涨潜力模型概率，预测5日内最大涨幅>=15%（基准{pot_base:.1f}%，分数越高越准） | - "
+        f"| 🔥>={pot_fire:.0f}% 🔴>={pot_red:.0f}% 🟡>={pot_yellow:.0f}% ⚪<{pot_yellow:.0f}% | `ml_predict_potential` |"
+    )
+    lines.append(
+        f"| ML涨 | 涨幅排序模型分数（全特征、不校准），预测5日内涨≥8%概率，≥{gain_fire:.0f}为Top20%信号（基准{gain_base:.1f}%） | - "
+        f"| 🔥>={gain_fire:.0f} ⭐>={gain_warm:.0f} 💡<{gain_warm:.0f} | `ml_predict_gain` |"
+    )
     lines.append("| 规则 | 10条V2规则匹配百分比 | 100%为满分 | 🔥100%满分 🔴>=86% 🟡>=71% ⚪<71% | `calc_v2_rule_match()` |")
     lines.append("")
     lines.append("> 示例：`资金 +740万(3.7)` 表示主力净流入约740万元，主力净流入强度约为3.7%。")
@@ -615,14 +680,14 @@ def generate_report(
     lines.append("- `空`：空间/预期涨幅，粗体表示 >=15%")
     lines.append("- `达`：到达概率评分，粗体表示 >=70")
     lines.append("")
-    lines.append("**ML胜率概率**（持有5日净赚>5%，28分附近最可信，40+样本少不稳）")
+    lines.append(f"**ML胜率概率**（持有5日净赚>5%，基准{win_base:.1f}%，高于基准即正期望）")
     lines.append("")
     lines.append("| 标记 | 含义 |")
     lines.append("|:----:|:----:|")
-    lines.append(f"| {E_FIRE} | >= 28% |")
-    lines.append(f"| {E_RED} | >= 25% |")
-    lines.append(f"| {E_YELLOW} | >= 22% |")
-    lines.append(f"| {E_WHITE} | < 22% |")
+    lines.append(f"| {E_FIRE} | >= {win_fire:.0f}% |")
+    lines.append(f"| {E_RED} | >= {win_red:.0f}% |")
+    lines.append(f"| {E_YELLOW} | >= {win_yellow:.0f}% |")
+    lines.append(f"| {E_WHITE} | < {win_yellow:.0f}% |")
     lines.append("")
     lines.append("</details>")
     lines.append("")
@@ -841,6 +906,16 @@ def generate_html_report(
     days_data = _build_html_days_data(filtered, trading_days)
     days_json = json.dumps(days_data, ensure_ascii=False)
 
+    # 注入染色阈值供 JS 使用
+    win_fire, _win_red, win_yellow = _prob_cuts("win")
+    pot_fire, _pot_red, _pot_yellow = _prob_cuts("potential")
+    gain_fire, gain_warm = _gain_cuts()
+    thr_json = json.dumps({
+        "winFire": win_fire, "winYellow": win_yellow,
+        "potFire": pot_fire,
+        "gainFire": gain_fire, "gainWarm": gain_warm,
+    }, ensure_ascii=False)
+
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -882,10 +957,9 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
 /* ── 单张卡片 ── */
 .card{{background:#fff;border-radius:12px;padding:13px 15px;border:1px solid #e4e4e0;border-left:4px solid #ccc;transition:box-shadow .15s}}
 .card:hover{{box-shadow:0 3px 14px rgba(0,0,0,.07)}}
-.card.c-blue{{border-left-color:#2563eb}}
-.card.c-teal{{border-left-color:#059669}}
-.card.c-amber{{border-left-color:#d97706}}
-.card.c-gray{{border-left-color:#bbb}}
+.card.c-hot{{border-left-color:#dc2626}}
+.card.c-warm{{border-left-color:#d97706}}
+.card.c-dim{{border-left-color:#bbb}}
 /* 卡片顶部 */
 .card-top{{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:9px}}
 .stock-name{{font-size:15px;font-weight:600;color:#111;display:flex;align-items:center;gap:5px;flex-wrap:wrap}}
@@ -893,10 +967,9 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
 .stock-meta{{font-size:11px;color:#999;margin-top:2px}}
 .ml-box{{text-align:right;flex-shrink:0;margin-left:8px}}
 .ml-num{{font-size:20px;font-weight:700;line-height:1}}
-.ml-num.c-blue{{color:#1d4ed8}}
-.ml-num.c-teal{{color:#065f46}}
-.ml-num.c-amber{{color:#92400e}}
-.ml-num.c-gray{{color:#9ca3af}}
+.ml-num.c-hot{{color:#dc2626}}
+.ml-num.c-warm{{color:#d97706}}
+.ml-num.c-dim{{color:#bbb}}
 .ml-pot{{font-size:11px;color:#aaa;margin-top:2px}}
 .ml-pot.has{{color:#b91c1c;font-weight:500}}
 /* 信号行 */
@@ -913,7 +986,6 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
 .m-val{{font-size:12px;font-weight:600;color:#333}}
 .m-val.hot{{color:#dc2626}}
 .m-val.warm{{color:#d97706}}
-.m-val.ok{{color:#059669}}
 .m-val.dim{{color:#bbb}}
 /* 资金行 */
 .cap-row{{display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid #f0f0ec}}
@@ -925,9 +997,9 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
 .rule-wrap{{display:flex;flex-direction:column;align-items:center;gap:2px}}
 .rule-bar{{width:44px;height:3px;background:#eee;border-radius:2px;overflow:hidden}}
 .rule-fill{{height:100%;border-radius:2px;background:#bbb}}
-.rule-fill.r80{{background:#2563eb}}
-.rule-fill.r60{{background:#059669}}
-.rule-fill.r40{{background:#d97706}}
+.rule-fill.r-hot{{background:#dc2626}}
+.rule-fill.r-warm{{background:#d97706}}
+.rule-fill.r-dim{{background:#bbb}}
 .rule-num{{font-size:10px;color:#aaa}}
 /* 空状态 */
 .empty{{text-align:center;padding:40px;color:#bbb;font-size:14px}}
@@ -962,17 +1034,14 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
     <span>📈 共 <strong>{total}</strong> 只</span>
   </div>
   <div class="legend">
-    <span class="leg" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe">
-      <span class="leg-dot" style="background:#2563eb"></span>ML ≥ 28%
-    </span>
-    <span class="leg" style="background:#f0fdf4;color:#065f46;border-color:#bbf7d0">
-      <span class="leg-dot" style="background:#059669"></span>ML ≥ 25%
+    <span class="leg" style="background:#fef2f2;color:#dc2626;border-color:#fecaca">
+      <span class="leg-dot" style="background:#dc2626"></span>ML ≥ {win_fire:.0f}%
     </span>
     <span class="leg" style="background:#fffbeb;color:#92400e;border-color:#fde68a">
-      <span class="leg-dot" style="background:#d97706"></span>ML ≥ 22%
+      <span class="leg-dot" style="background:#d97706"></span>ML ≥ {win_yellow:.0f}%
     </span>
     <span class="leg" style="background:#f9fafb;color:#6b7280;border-color:#e5e7eb">
-      <span class="leg-dot" style="background:#bbb"></span>&lt; 22%
+      <span class="leg-dot" style="background:#bbb"></span>&lt; {win_yellow:.0f}%
     </span>
     <span class="leg" style="background:#fef3c7;color:#92400e;border-color:#fbbf24">
       连续 = 多日重复出现
@@ -1000,6 +1069,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans 
 
 <script>
 const DAYS = {days_json};
+const THR = {thr_json};
 
 let curDay = 0, curSort = 'ml';
 
@@ -1011,10 +1081,10 @@ function fmtCap(v) {{
 }}
 
 function mlCls(v) {{
-  return v >= 28 ? 'c-blue' : v >= 25 ? 'c-teal' : v >= 22 ? 'c-amber' : 'c-gray';
+  return v >= THR.winFire ? 'c-hot' : v >= THR.winYellow ? 'c-warm' : 'c-dim';
 }}
 function momCls(v) {{
-  return v >= 100 ? 'hot' : v >= 80 ? 'warm' : v >= 60 ? 'ok' : 'dim';
+  return v >= 80 ? 'hot' : v >= 60 ? 'warm' : 'dim';
 }}
 function volCls(v) {{
   return v >= 1.5 ? 'hot' : v >= 1.0 ? 'warm' : 'dim';
@@ -1023,10 +1093,10 @@ function spcCls(v) {{
   return v >= 15 ? 'hot' : v >= 10 ? 'warm' : 'dim';
 }}
 function reachCls(v) {{
-  return v >= 80 ? 'hot' : v >= 70 ? 'warm' : v >= 60 ? 'ok' : 'dim';
+  return v >= 70 ? 'hot' : v >= 60 ? 'warm' : 'dim';
 }}
 function ruleCls(v) {{
-  return v >= 80 ? 'r80' : v >= 60 ? 'r60' : v >= 40 ? 'r40' : '';
+  return v >= 86 ? 'r-hot' : v >= 71 ? 'r-warm' : 'r-dim';
 }}
 function sigCls(s) {{
   if (s.startsWith('严格')) return 'strict';
@@ -1077,8 +1147,8 @@ function renderGrid(day) {{
         </div>
         <div class="ml-box">
           <div class="ml-num ${{cls(s.ml)}}">${{s.ml}}%</div>
-          <div class="ml-pot${{s.pot !== null && s.pot > 30 ? ' has' : ''}}">潜 ${{s.pot !== null ? s.pot + '%' : '—'}}</div>
-          <div class="ml-gain${{s.gain !== null && s.gain >= 67 ? ' hot' : (s.gain !== null && s.gain >= 60 ? ' warm' : '')}}" style="font-size:10px;color:${{s.gain !== null && s.gain >= 67 ? '#dc2626' : (s.gain !== null && s.gain >= 60 ? '#d97706' : '#bbb')}};margin-top:2px;font-weight:${{s.gain !== null && s.gain >= 67 ? '700' : '400'}}">涨 ${{s.gain !== null ? Math.round(s.gain) : '—'}}</div>
+          <div class="ml-pot${{s.pot !== null && s.pot >= THR.potFire ? ' has' : ''}}">潜 ${{s.pot !== null ? s.pot + '%' : '—'}}</div>
+          <div class="ml-gain${{s.gain !== null && s.gain >= THR.gainFire ? ' hot' : (s.gain !== null && s.gain >= THR.gainWarm ? ' warm' : '')}}" style="font-size:10px;color:${{s.gain !== null && s.gain >= THR.gainFire ? '#dc2626' : (s.gain !== null && s.gain >= THR.gainWarm ? '#d97706' : '#bbb')}};margin-top:2px;font-weight:${{s.gain !== null && s.gain >= THR.gainFire ? '700' : '400'}}">涨 ${{s.gain !== null ? Math.round(s.gain) : '—'}}</div>
         </div>
       </div>
       <div class="sig-row">

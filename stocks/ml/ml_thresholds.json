@@ -1,0 +1,28 @@
+{
+  "train_date": "2026-06-05",
+  "win": {
+    "label": "ML胜",
+    "desc": "短线胜率模型概率，预测持有5日净赚>5%",
+    "attr": "ml_predict_prob",
+    "baseline": 17.5,
+    "high": 30.0,
+    "kind": "prob"
+  },
+  "potential": {
+    "label": "ML潜",
+    "desc": "大涨潜力模型概率，预测5日内最大涨幅>=15%",
+    "attr": "ml_predict_potential",
+    "baseline": 10.2,
+    "high": 30.0,
+    "kind": "prob"
+  },
+  "gain": {
+    "label": "ML涨",
+    "desc": "涨幅排序模型分数（全特征、不校准），预测5日内涨>=8%概率",
+    "attr": "ml_predict_gain",
+    "baseline": 23.6,
+    "top20": 42.9,
+    "top30": 31.3,
+    "kind": "score"
+  }
+}

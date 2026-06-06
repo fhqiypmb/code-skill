@@ -482,6 +482,12 @@ def train() -> Optional[Any]:
 
     _save_report(bundle, labeled, y, feature_fields, potential_bundle, gain_bundle)
 
+    # 导出染色阈值供 weekly_ml_report 读取（失败不影响主流程，模型/报告此时已落盘）
+    try:
+        _export_thresholds(bundle, labeled, potential_bundle, gain_bundle)
+    except Exception as e:
+        logger.warning(f"阈值导出失败（已忽略，不影响训练）: {e}")
+
     return model
 
 
@@ -882,6 +888,117 @@ FEATURE_NAMES_ZH = {
 }
 
 
+def _parse_bucket_lower_bound(label: str) -> Optional[float]:
+    """从概率桶 label 解析出下沿数值。
+    ">=40%" -> 40 ; "30%-35%" -> 30 ; "<25%" -> None（兜底桶，无法作为">="阈值）。
+    """
+    import re
+    if label.startswith('<'):
+        return None
+    m = re.search(r'(\d+(?:\.\d+)?)', label)
+    return float(m.group(1)) if m else None
+
+
+def _derive_high_threshold(
+    prob_bucket_stats: List[Dict],
+    baseline_rate: float,
+    factor: float = 1.4,
+    min_samples: int = 5,
+) -> Optional[Dict]:
+    """从概率桶推导“高分线”：命中率 >= factor×基准 且样本量足够的桶里，取下沿最低的那个。
+
+    返回 {'threshold': 下沿%, 'hit_rate': 该桶命中率, 'lift': 相对基线倍数, 'samples': 桶内样本数}，
+    没有任何桶达标时返回 None（说明当周数据无明显高分区）。
+    """
+    if not baseline_rate or baseline_rate <= 0:
+        return None
+    target = baseline_rate * factor
+    candidates = []
+    for s in prob_bucket_stats:
+        lb = _parse_bucket_lower_bound(s.get('label', ''))
+        if lb is None:
+            continue
+        if s.get('total', 0) >= min_samples and s.get('hit_rate', 0) >= target:
+            candidates.append((lb, s))
+    if not candidates:
+        return None
+    lb, s = min(candidates, key=lambda x: x[0])
+    return {
+        'threshold': lb,
+        'hit_rate': s['hit_rate'],
+        'lift': s['hit_rate'] / baseline_rate,
+        'samples': s['total'],
+    }
+
+
+def _export_thresholds(
+    bundle: Dict,
+    labeled: List[Dict],
+    potential_bundle: Optional[Dict] = None,
+    gain_bundle: Optional[Dict] = None,
+) -> None:
+    """把三个模型的染色分档阈值导出到 ml_thresholds.json，供 weekly_ml_report 读取。
+
+    设计：阈值以“基准命中率”为锚——胜率/潜力模型经 isotonic 校准，输出概率≈真实命中率，
+    所以拿“基准 / 高分线”分档上色是有统计意义的；涨幅模型不校准，用 Top-N 排序分阈值。
+    周报读不到此文件时回退到自身写死的默认值，所以这里失败也不影响主流程。
+    """
+    _ptr = SHORTLINE_PROFIT_THRESHOLD_PCT / 100.0
+    def _is_win(r):
+        return 1 if (r.get('actual_return') or 0) > _ptr else 0
+
+    win_baseline = (sum(_is_win(r) for r in labeled) / len(labeled) * 100) if labeled else 0
+    win_high = _derive_high_threshold(bundle.get('prob_bucket_stats', []), win_baseline / 100)
+
+    out = {
+        'train_date': bundle.get('train_date', ''),
+        # 短线胜率模型（校准概率）：基准=整体净赚率，高分线=概率桶推导
+        'win': {
+            'label': 'ML胜',
+            'desc': f'短线胜率模型概率，预测持有{OUTCOME_DAYS}日净赚>{SHORTLINE_PROFIT_THRESHOLD_PCT:.0f}%',
+            'attr': 'ml_predict_prob',
+            'baseline': round(win_baseline, 1),
+            'high': round(win_high['threshold'], 1) if win_high else round(win_baseline * 1.6, 1),
+            'kind': 'prob',
+        },
+    }
+
+    if potential_bundle:
+        pot_baseline = potential_bundle.get('positive_rate', 0) * 100
+        pot_high = _derive_high_threshold(potential_bundle.get('prob_bucket_stats', []),
+                                          potential_bundle.get('positive_rate', 0))
+        out['potential'] = {
+            'label': 'ML潜',
+            'desc': f'大涨潜力模型概率，预测{OUTCOME_DAYS}日内最大涨幅>={POTENTIAL_GAIN_THRESHOLD_PCT:.0f}%',
+            'attr': 'ml_predict_potential',
+            'baseline': round(pot_baseline, 1),
+            'high': round(pot_high['threshold'], 1) if pot_high else round(pot_baseline * 1.6, 1),
+            'kind': 'prob',
+        }
+
+    if gain_bundle:
+        thr = gain_bundle.get('thresholds', {})
+        top20 = thr.get('top20_threshold')
+        top30 = thr.get('top30_threshold')
+        out['gain'] = {
+            'label': 'ML涨',
+            'desc': f'涨幅排序模型分数（全特征、不校准），预测{OUTCOME_DAYS}日内涨>={GAIN_THRESHOLD_PCT:.0f}%概率',
+            'attr': 'ml_predict_gain',
+            'baseline': round(gain_bundle.get('baseline', 0) * 100, 1),
+            'top20': round(top20 * 100, 1) if top20 is not None else 67.0,
+            'top30': round(top30 * 100, 1) if top30 is not None else 60.0,
+            'kind': 'score',
+        }
+
+    thr_file = os.path.join(_ML_DIR, 'ml_thresholds.json')
+    try:
+        with open(thr_file, 'w', encoding='utf-8') as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+        logger.info(f"阈值已导出: {thr_file}")
+    except Exception as e:
+        logger.warning(f"阈值导出失败（不影响主流程）: {e}")
+
+
 def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str], potential_bundle: Optional[Dict] = None, gain_bundle: Optional[Dict] = None) -> None:
     """生成模型分析报告 model_report.md"""
     report_file = os.path.join(_ML_DIR, 'model_report.md')
@@ -1091,7 +1208,58 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
     potential_rate = sum(1 for r in labeled if float(r.get('max_gain_pct') or 0) >= POTENTIAL_GAIN_THRESHOLD_PCT) / len(labeled)
     lines.append(f"- 短线整体净赚率(>{SHORTLINE_PROFIT_THRESHOLD_PCT:.0f}%): {overall_rate:.1%}（短线确定性基准线）")
     lines.append(f"- 大涨整体命中率(>={POTENTIAL_GAIN_THRESHOLD_PCT:.0f}%): {potential_rate:.1%}（潜力模型基准线）")
-    lines.append(f"- 使用方式：优先选择 `短线胜率高 + 大涨潜力高`；若胜率一般但潜力高，可降低仓位观察，等待二次确认。")
+
+    # ── “高”是多少算高：从本周概率桶动态推导阈值线（命中率≥1.4×基准的最低桶下沿）──
+    lines.append(f"\n### “高分线”自动标定（每周随数据更新）")
+    lines.append(f"判定规则：在测试集概率桶中，取“命中率 ≥ 1.4×基准、且样本数≥5”的最低概率档下沿作为该模型的“高”阈值。")
+    lines.append("")
+    lines.append("| 模型 | 对应文件 | “高”阈值 | 该档命中率(真兑现) | 基准(瞎买) | 相对基准(强几倍) |")
+    lines.append("|------|----------|----------|------------|------------|----------|")
+
+    win_high = _derive_high_threshold(bundle.get('prob_bucket_stats', []), overall_rate)
+    if win_high:
+        lines.append(
+            f"| 短线胜率模型 | `shadow_model.pkl` | 概率 ≥ {win_high['threshold']:.0f}% | "
+            f"{win_high['hit_rate']:.1%} | {overall_rate:.1%} | {win_high['lift']:.1f}x |"
+        )
+    else:
+        lines.append(f"| 短线胜率模型 | `shadow_model.pkl` | 本周无显著高分区 | — | {overall_rate:.1%} | — |")
+
+    if potential_bundle:
+        pot_baseline = potential_bundle.get('positive_rate', 0)
+        pot_high = _derive_high_threshold(potential_bundle.get('prob_bucket_stats', []), pot_baseline)
+        if pot_high:
+            lines.append(
+                f"| 大涨潜力模型 | `shadow_potential_model.pkl` | 概率 ≥ {pot_high['threshold']:.0f}% | "
+                f"{pot_high['hit_rate']:.1%} | {pot_baseline:.1%} | {pot_high['lift']:.1f}x |"
+            )
+        else:
+            lines.append(f"| 大涨潜力模型 | `shadow_potential_model.pkl` | 本周无显著高分区 | — | {pot_baseline:.1%} | — |")
+
+    if gain_bundle:
+        gain_thr = gain_bundle.get('thresholds', {})
+        top20 = gain_thr.get('top20_threshold')
+        gain_baseline = gain_bundle.get('baseline', 0)
+        top20_hit = gain_bundle.get('topN_hits', {}).get('top20', {})
+        if top20 is not None:
+            score_100 = top20 * 100
+            hr = top20_hit.get('hit_rate', 0)
+            lift = top20_hit.get('lift', 0)
+            lines.append(
+                f"| 涨幅排序模型 | `shadow_gain_model.pkl` | 分数 ≥ {score_100:.1f}（历史Top20%） | "
+                f"{hr:.1%} | {gain_baseline:.1%} | {lift:.1f}x |"
+            )
+        else:
+            lines.append(f"| 涨幅排序模型 | `shadow_gain_model.pkl` | 阈值未生成 | — | {gain_baseline:.1%} | — |")
+
+    lines.append("")
+    lines.append(
+        f"> 说明：三个模型都是随机森林（RandomForestClassifier）。胜率/潜力模型经 isotonic 校准，"
+        f"输出可当真实概率读；涨幅模型不校准，输出为 0~100 的排序分数，按上表阈值取 Top-N。"
+        f"阈值随每周训练数据自动重算，不是写死的固定值。"
+    )
+
+    lines.append(f"\n- 使用方式：优先选择 `短线胜率高 + 大涨潜力高`（两者均达到上表“高”阈值）；若胜率一般但潜力高，可降低仓位观察，等待二次确认。")
     lines.append(f"- 当前限制：尚未接入市值、估值、财务成长、ROE、现金流、研发和机构持仓，因此该模型是“十倍股早期线索模型”，不是完整基本面十倍股模型。")
 
     with open(report_file, 'w', encoding='utf-8') as f:
