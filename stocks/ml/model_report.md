@@ -1,6 +1,6 @@
 # ML模型分析报告
 
-> **训练日期**: 2026-06-05（每周一自动更新）  
+> **训练日期**: 2026-06-06（每周一自动更新）  
 > **共用样本数**: 2770（已回填实际涨跌结果的历史信号数量）  
 > 本系统包含三个独立模型：**短线胜率模型**（预测持有5日净赚>5%）、**大涨潜力模型**（预测5日内最大涨幅>=15%）和 **涨幅排序模型**（预测5日内最大涨幅>=8%，本次不改动）
 
@@ -28,7 +28,7 @@
 
 任务：预测信号发出后5个交易日，持有到期(收盘价)净收益能否 > 5%。
 （原“是否摸到目标价”因每只票目标价宽窄不一、标签噪声大，已弃用）
-- **训练集准确率**: 87.41%  |  **测试集准确率**: 86.28%
+- **训练集准确率**: 88.76%  |  **测试集准确率**: 86.10%
 - **切分方式**: 时间序列切分（前80%训练 / 后20%测试，无未来信息泄漏）
 - **训练截止**: 2026-05-18  |  **测试起始**: 2026-05-18
 - **概率校准**: 已使用 isotonic 5折交叉校准，模型输出概率 ≈ 实际净赚率
@@ -38,54 +38,54 @@
 ### 测试集概率桶命中率
 | 概率区间 | 信号数 | 命中数 | 命中率 |
 |----------|--------|--------|--------|
-| >=40% | 9 | 2 | 22.2% |
-| 35%-40% | 7 | 1 | 14.3% |
-| 30%-35% | 34 | 9 | 26.5% |
-| 25%-30% | 155 | 26 | 16.8% |
-| <25% | 349 | 36 | 10.3% |
+| >=40% | 11 | 3 | 27.3% |
+| 35%-40% | 20 | 4 | 20.0% |
+| 30%-35% | 39 | 9 | 23.1% |
+| 25%-30% | 105 | 16 | 15.2% |
+| <25% | 379 | 42 | 11.1% |
 
 ### 特征重要性 TOP20
 | 排名 | 特征名 | 重要性得分 |
 |------|--------|------------|
-| 1 | `an_market_pos_relative_strength` | 0.0380 |
-| 2 | `sr_score` | 0.0344 |
-| 3 | `an_success_rate_dim_reach_prob` | 0.0315 |
-| 4 | `an_technical_expected_gain_pct` | 0.0307 |
-| 5 | `an_success_rate_score` | 0.0304 |
-| 6 | `an_technical_atr` | 0.0294 |
-| 7 | `an_quote_change_pct` | 0.0289 |
-| 8 | `an_capital_flow_ratio` | 0.0281 |
-| 9 | `an_capital_super_net_in` | 0.0268 |
-| 10 | `sc_gold_day_vol` | 0.0266 |
-| 11 | `an_capital_big_net_in` | 0.0260 |
-| 12 | `an_quote_turnover_rate` | 0.0257 |
-| 13 | `an_capital_main_net_in` | 0.0255 |
-| 14 | `an_trend_score` | 0.0250 |
-| 15 | `an_quote_volume` | 0.0249 |
-| 16 | `sc_volume` | 0.0248 |
-| 17 | `an_quote_high` | 0.0245 |
-| 18 | `sc_first_double_vol` | 0.0244 |
-| 19 | `an_technical_stop_loss` | 0.0242 |
-| 20 | `sc_yin_vol` | 0.0242 |
+| 1 | `an_market_pos_relative_strength` | 0.0375 |
+| 2 | `an_success_rate_score` | 0.0333 |
+| 3 | `an_technical_expected_gain_pct` | 0.0332 |
+| 4 | `an_success_rate_dim_reach_prob` | 0.0316 |
+| 5 | `sr_score` | 0.0303 |
+| 6 | `an_quote_change_pct` | 0.0293 |
+| 7 | `sc_gold_day_vol` | 0.0285 |
+| 8 | `an_capital_flow_ratio` | 0.0284 |
+| 9 | `an_technical_atr` | 0.0274 |
+| 10 | `an_capital_super_net_in` | 0.0271 |
+| 11 | `sc_volume` | 0.0268 |
+| 12 | `an_quote_turnover_rate` | 0.0267 |
+| 13 | `an_capital_big_net_in` | 0.0265 |
+| 14 | `an_trend_score` | 0.0257 |
+| 15 | `target_price` | 0.0252 |
+| 16 | `an_quote_volume` | 0.0250 |
+| 17 | `an_success_rate_dim_momentum` | 0.0250 |
+| 18 | `sc_first_double_vol` | 0.0250 |
+| 19 | `sc_yin_vol` | 0.0242 |
+| 20 | `an_capital_main_net_in` | 0.0242 |
 
 ### 净赚 vs 未净赚信号特征对比
 | 特征名 | 净赚均值 | 未净赚均值 | 差异 |
 |--------|----------|------------|------|
 | `an_market_pos_relative_strength` | 5.019 | 0.129 | +4.890 ↑净赚更高 |
-| `sr_score` | 57.467 | 48.157 | +9.310 ↑净赚更高 |
-| `an_success_rate_dim_reach_prob` | 63.518 | 57.260 | +6.258 ↑净赚更高 |
-| `an_technical_expected_gain_pct` | 11.376 | 9.220 | +2.156 ↑净赚更高 |
 | `an_success_rate_score` | 57.467 | 48.157 | +9.310 ↑净赚更高 |
-| `an_technical_atr` | 1.968 | 1.220 | +0.748 ↑净赚更高 |
+| `an_technical_expected_gain_pct` | 11.376 | 9.220 | +2.156 ↑净赚更高 |
+| `an_success_rate_dim_reach_prob` | 63.518 | 57.260 | +6.258 ↑净赚更高 |
+| `sr_score` | 57.467 | 48.157 | +9.310 ↑净赚更高 |
 | `an_quote_change_pct` | 2.757 | 1.839 | +0.918 ↑净赚更高 |
-| `an_capital_flow_ratio` | 1.505 | 0.953 | +0.552 ↑净赚更高 |
-| `an_capital_super_net_in` | 691.505 | 896.698 | -205.193 ↓未净赚更高 |
 | `sc_gold_day_vol` | 571457.378 | 796646.132 | -225188.754 ↓未净赚更高 |
-| `an_capital_big_net_in` | 125.504 | 146.974 | -21.470 ↓未净赚更高 |
+| `an_capital_flow_ratio` | 1.505 | 0.953 | +0.552 ↑净赚更高 |
+| `an_technical_atr` | 1.968 | 1.220 | +0.748 ↑净赚更高 |
+| `an_capital_super_net_in` | 691.505 | 896.698 | -205.193 ↓未净赚更高 |
+| `sc_volume` | 936846.880 | 1355190.260 | -418343.380 ↓未净赚更高 |
 | `an_quote_turnover_rate` | 5.598 | 4.157 | +1.441 ↑净赚更高 |
-| `an_capital_main_net_in` | 817.009 | 1043.672 | -226.663 ↓未净赚更高 |
+| `an_capital_big_net_in` | 125.504 | 146.974 | -21.470 ↓未净赚更高 |
 | `an_trend_score` | 67.580 | 57.663 | +9.917 ↑净赚更高 |
-| `an_quote_volume` | 366170.591 | 438882.044 | -72711.453 ↓未净赚更高 |
+| `target_price` | 43.112 | 30.731 | +12.380 ↑净赚更高 |
 
 ---
 ## 三、大涨潜力模型
@@ -95,57 +95,57 @@
 作用：给短线胜率模型做辅助。胜率模型负责“能不能落袋赚钱”，潜力模型负责“有没有大涨空间”。当胜率一般但潜力高时，表示它可能不是稳赚但弹性大；当胜率和潜力同时高时，是“看长做短”的优先信号。
 - **样本数**: 2770
 - **大涨基准率**: 10.2%
-- **训练集准确率**: 90.66%  |  **测试集准确率**: 89.53%
+- **训练集准确率**: 93.64%  |  **测试集准确率**: 89.53%
 
 ### 潜力概率桶命中率
 | 潜力概率区间 | 信号数 | 大涨命中数 | 命中率 |
 |--------------|--------|--------------|--------|
 | >=60% | 0 | 0 | 0.0% |
 | 50%-60% | 0 | 0 | 0.0% |
-| 40%-50% | 2 | 0 | 0.0% |
-| 30%-40% | 36 | 10 | 27.8% |
-| <30% | 516 | 48 | 9.3% |
+| 40%-50% | 4 | 0 | 0.0% |
+| 30%-40% | 21 | 7 | 33.3% |
+| <30% | 529 | 51 | 9.6% |
 
 ### 潜力模型特征重要性 TOP20
 | 排名 | 特征名 | 重要性得分 |
 |------|--------|------------|
-| 1 | `an_technical_expected_gain_pct` | 0.0506 |
-| 2 | `an_market_pos_relative_strength` | 0.0369 |
-| 3 | `an_capital_super_net_in` | 0.0344 |
-| 4 | `sr_score` | 0.0343 |
-| 5 | `an_quote_change_pct` | 0.0323 |
-| 6 | `an_success_rate_score` | 0.0315 |
-| 7 | `an_success_rate_dim_reach_prob` | 0.0304 |
-| 8 | `an_quote_turnover_rate` | 0.0301 |
-| 9 | `an_capital_main_net_in` | 0.0296 |
-| 10 | `an_technical_atr` | 0.0275 |
-| 11 | `an_capital_flow_ratio` | 0.0273 |
-| 12 | `an_quote_amount` | 0.0260 |
-| 13 | `an_success_rate_dim_momentum` | 0.0254 |
-| 14 | `an_capital_big_net_in` | 0.0252 |
-| 15 | `sc_volume` | 0.0242 |
-| 16 | `an_trend_score` | 0.0227 |
-| 17 | `an_market_pos_score` | 0.0216 |
-| 18 | `sc_yin_vol` | 0.0213 |
-| 19 | `an_quote_volume` | 0.0211 |
-| 20 | `sc_gold_day_vol` | 0.0208 |
+| 1 | `an_technical_expected_gain_pct` | 0.0518 |
+| 2 | `an_capital_super_net_in` | 0.0349 |
+| 3 | `sr_score` | 0.0340 |
+| 4 | `an_market_pos_relative_strength` | 0.0338 |
+| 5 | `an_success_rate_score` | 0.0335 |
+| 6 | `an_quote_change_pct` | 0.0332 |
+| 7 | `an_success_rate_dim_reach_prob` | 0.0331 |
+| 8 | `an_quote_turnover_rate` | 0.0315 |
+| 9 | `an_capital_main_net_in` | 0.0278 |
+| 10 | `an_capital_flow_ratio` | 0.0274 |
+| 11 | `an_success_rate_dim_momentum` | 0.0272 |
+| 12 | `an_technical_atr` | 0.0250 |
+| 13 | `an_quote_amount` | 0.0247 |
+| 14 | `an_capital_big_net_in` | 0.0243 |
+| 15 | `sc_volume` | 0.0234 |
+| 16 | `an_trend_score` | 0.0223 |
+| 17 | `an_market_pos_score` | 0.0222 |
+| 18 | `an_quote_volume` | 0.0221 |
+| 19 | `an_market_pos_vol_ratio` | 0.0218 |
+| 20 | `sc_yin_vol` | 0.0216 |
 
 ### 高弹性 vs 普通信号特征对比
 | 特征名 | 大涨均值 | 普通均值 | 差异 |
 |--------|------------|----------|------|
 | `an_technical_expected_gain_pct` | 13.143 | 9.193 | +3.949 ↑大涨更高 |
-| `an_market_pos_relative_strength` | 7.663 | 0.224 | +7.439 ↑大涨更高 |
 | `an_capital_super_net_in` | 372.392 | 916.426 | -544.035 ↓普通更高 |
 | `sr_score` | 61.595 | 48.440 | +13.155 ↑大涨更高 |
-| `an_quote_change_pct` | 3.401 | 1.840 | +1.561 ↑大涨更高 |
+| `an_market_pos_relative_strength` | 7.663 | 0.224 | +7.439 ↑大涨更高 |
 | `an_success_rate_score` | 61.595 | 48.440 | +13.155 ↑大涨更高 |
+| `an_quote_change_pct` | 3.401 | 1.840 | +1.561 ↑大涨更高 |
 | `an_success_rate_dim_reach_prob` | 68.024 | 57.253 | +10.771 ↑大涨更高 |
 | `an_quote_turnover_rate` | 7.049 | 4.108 | +2.941 ↑大涨更高 |
 | `an_capital_main_net_in` | 626.241 | 1047.060 | -420.819 ↓普通更高 |
-| `an_technical_atr` | 2.330 | 1.239 | +1.092 ↑大涨更高 |
 | `an_capital_flow_ratio` | 1.478 | 1.001 | +0.477 ↑大涨更高 |
-| `an_quote_amount` | 1008207005.492 | 488733734.365 | +519473271.126 ↑大涨更高 |
 | `an_success_rate_dim_momentum` | 77.352 | 56.204 | +21.149 ↑大涨更高 |
+| `an_technical_atr` | 2.330 | 1.239 | +1.092 ↑大涨更高 |
+| `an_quote_amount` | 1008207005.492 | 488733734.365 | +519473271.126 ↑大涨更高 |
 | `an_capital_big_net_in` | 253.850 | 130.634 | +123.216 ↑大涨更高 |
 | `sc_volume` | 1175121.219 | 1294265.991 | -119144.772 ↓普通更高 |
 
@@ -164,40 +164,40 @@
 ### 测试集 Top-N 命中率（核心指标）
 | Top N | 样本数 | 命中率 | 相对基线提升 |
 |-------|--------|--------|------------|
-| Top 50% | 277 | **35.7%** | 1.5x |
-| Top 30% | 166 | **39.8%** | 1.7x |
-| Top 20% | 110 | **42.7%** | 1.8x |
-| Top 10% | 55 | **45.5%** | 1.9x |
+| Top 50% | 277 | **34.3%** | 1.4x |
+| Top 30% | 166 | **42.2%** | 1.8x |
+| Top 20% | 110 | **47.3%** | 2.0x |
+| Top 10% | 55 | **47.3%** | 2.0x |
 
 ### 实战阈值
 | 阈值 | 含义 |
 |------|------|
-| >= 0.4289 | 历史 Top20% 信号 |
-| >= 0.3623 | 历史 Top25% 信号 |
-| >= 0.3133 | 历史 Top30% 信号 |
+| >= 0.4334 | 历史 Top20% 信号 |
+| >= 0.3675 | 历史 Top25% 信号 |
+| >= 0.3119 | 历史 Top30% 信号 |
 
 ### 特征重要性 TOP15
 | 排名 | 特征名 | 重要性得分 |
 |------|--------|------------|
-| 1 | `an_technical_expected_gain_pct` | 0.0545 |
-| 2 | `an_market_pos_relative_strength` | 0.0396 |
-| 3 | `an_quote_turnover_rate` | 0.0345 |
-| 4 | `an_success_rate_score` | 0.0329 |
-| 5 | `an_quote_change_pct` | 0.0313 |
-| 6 | `sr_score` | 0.0310 |
-| 7 | `an_success_rate_dim_reach_prob` | 0.0280 |
-| 8 | `an_technical_atr` | 0.0254 |
-| 9 | `an_success_rate_dim_momentum` | 0.0245 |
-| 10 | `an_quote_volume` | 0.0244 |
-| 11 | `an_quote_amount` | 0.0241 |
-| 12 | `an_capital_flow_ratio` | 0.0234 |
-| 13 | `sc_first_double_vol` | 0.0231 |
-| 14 | `sc_gold_day_vol` | 0.0228 |
-| 15 | `an_capital_main_net_in` | 0.0226 |
+| 1 | `an_technical_expected_gain_pct` | 0.0575 |
+| 2 | `an_quote_turnover_rate` | 0.0410 |
+| 3 | `an_market_pos_relative_strength` | 0.0378 |
+| 4 | `sr_score` | 0.0324 |
+| 5 | `an_success_rate_score` | 0.0310 |
+| 6 | `an_quote_change_pct` | 0.0290 |
+| 7 | `an_success_rate_dim_reach_prob` | 0.0287 |
+| 8 | `an_capital_flow_ratio` | 0.0266 |
+| 9 | `sc_volume` | 0.0255 |
+| 10 | `an_capital_super_net_in` | 0.0247 |
+| 11 | `sc_gold_day_vol` | 0.0247 |
+| 12 | `an_success_rate_dim_momentum` | 0.0237 |
+| 13 | `an_quote_amount` | 0.0236 |
+| 14 | `an_technical_atr` | 0.0234 |
+| 15 | `an_trend_score` | 0.0234 |
 
 ---
 ## 五、结论摘要
-- 短线胜率模型最关键的3个特征: `an_market_pos_relative_strength` / `sr_score` / `an_success_rate_dim_reach_prob`
+- 短线胜率模型最关键的3个特征: `an_market_pos_relative_strength` / `an_success_rate_score` / `an_technical_expected_gain_pct`
 - 短线整体净赚率(>5%): 17.5%（短线确定性基准线）
 - 大涨整体命中率(>=15%): 10.2%（潜力模型基准线）
 
@@ -206,9 +206,9 @@
 
 | 模型 | 对应文件 | “高”阈值 | 该档命中率(真兑现) | 基准(瞎买) | 相对基准(强几倍) |
 |------|----------|----------|------------|------------|----------|
-| 短线胜率模型 | `shadow_model.pkl` | 概率 ≥ 30% | 26.5% | 17.5% | 1.5x |
-| 大涨潜力模型 | `shadow_potential_model.pkl` | 概率 ≥ 30% | 27.8% | 10.2% | 2.7x |
-| 涨幅排序模型 | `shadow_gain_model.pkl` | 分数 ≥ 42.9（历史Top20%） | 42.7% | 23.6% | 1.8x |
+| 短线胜率模型 | `shadow_model.pkl` | 概率 ≥ 40% | 27.3% | 17.5% | 1.6x |
+| 大涨潜力模型 | `shadow_potential_model.pkl` | 概率 ≥ 30% | 33.3% | 10.2% | 3.3x |
+| 涨幅排序模型 | `shadow_gain_model.pkl` | 分数 ≥ 43.3（历史Top20%） | 47.3% | 23.6% | 2.0x |
 
 > 说明：三个模型都是随机森林（RandomForestClassifier）。胜率/潜力模型经 isotonic 校准，输出可当真实概率读；涨幅模型不校准，输出为 0~100 的排序分数，按上表阈值取 Top-N。阈值随每周训练数据自动重算，不是写死的固定值。
 

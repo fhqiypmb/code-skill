@@ -38,6 +38,12 @@ SHORTLINE_PROFIT_THRESHOLD_PCT = 5.0
 # 涨幅模型：预测5日内最大涨幅 ≥8% 的概率（全特征、不校准、纯排序）
 GAIN_THRESHOLD_PCT = 8.0
 
+# 特征覆盖率护栏：一个特征至少要有这么高比例的样本"真有值"（非 None）才纳入训练。
+# 新采集的字段（如 sc_mk_* 市场环境特征）在历史样本里大面积缺失会被静默填 0，
+# 导致"训练时几乎恒为0、线上推理却有值"的分布偏移。低于该阈值的特征自动跳过并告警，
+# 等数据回填到足够覆盖率后会自动重新纳入，无需手改 exclude 名单。
+MIN_FEATURE_COVERAGE = 0.5
+
 
 # ==================== 数据读写 ====================
 
@@ -350,6 +356,37 @@ def update_outcomes() -> int:
 
 # ==================== 训练 ====================
 
+def _select_features(records: List[Dict], exclude: set, tag: str = "") -> List[str]:
+    """从样本中选出参与训练的数值型特征，并施加覆盖率护栏。
+
+    规则：候选 = 不在 exclude 名单、且为 int/float 的字段。
+    护栏：候选中"真有值(非 None)样本比例 < MIN_FEATURE_COVERAGE"的字段自动剔除并告警，
+    避免大面积缺失被静默填 0 后污染模型（训练几乎恒0、线上推理却有值的分布偏移）。
+    """
+    n = len(records)
+    candidates = sorted({
+        k for r in records for k, v in r.items()
+        if k not in exclude and isinstance(v, (int, float))
+    })
+    if not n:
+        return candidates
+
+    kept, dropped = [], []
+    for f in candidates:
+        coverage = sum(1 for r in records if r.get(f) is not None) / n
+        if coverage < MIN_FEATURE_COVERAGE:
+            dropped.append((f, coverage))
+        else:
+            kept.append(f)
+
+    prefix = f"[{tag}] " if tag else ""
+    if dropped:
+        for f, cov in sorted(dropped, key=lambda x: x[1]):
+            logger.warning(f"{prefix}特征 {f} 覆盖率仅 {cov:.0%}（<{MIN_FEATURE_COVERAGE:.0%}），样本太空，本次跳过")
+        logger.warning(f"{prefix}覆盖率护栏剔除 {len(dropped)} 个稀疏特征，保留 {len(kept)} 个")
+    return kept
+
+
 def train() -> Optional[Any]:
     """训练随机森林模型，返回模型对象，失败返回 None
 
@@ -393,10 +430,7 @@ def train() -> Optional[Any]:
         'an_technical_method_targets_ATR通道法',
         'an_technical_method_targets_斐波那契',
     }
-    feature_fields = sorted({
-        k for r in labeled for k, v in r.items()
-        if k not in exclude and isinstance(v, (int, float))
-    })
+    feature_fields = _select_features(labeled, exclude, tag="胜率")
 
     logger.info(f"训练样本: {len(labeled)} 条，特征: {len(feature_fields)} 个")
 
@@ -655,10 +689,7 @@ def _train_gain_model(labeled: List[Dict]) -> Optional[Dict]:
         'an_technical_method_targets_ATR通道法',
         'an_technical_method_targets_斐波那契',
     }
-    feature_fields = sorted({
-        k for r in gain_data for k, v in r.items()
-        if k not in exclude and isinstance(v, (int, float))
-    })
+    feature_fields = _select_features(gain_data, exclude, tag="涨幅模型")
 
     logger.info(f"[涨幅模型] 样本: {len(gain_data)} 条，全量特征: {len(feature_fields)} 个（含 sr_score 等派生字段）")
 
