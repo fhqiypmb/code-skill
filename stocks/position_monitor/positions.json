@@ -18,5 +18,12 @@
     "stop_pct": 8,
     "shares": 100
   },
-  "holdings": []
+  "holdings": [
+    {
+      "code": "001289",
+      "name": "龙源电力",
+      "cost": 19.24,
+      "buy_date": "2026-06-04"
+    }
+  ]
 }
