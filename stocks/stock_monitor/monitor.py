@@ -87,6 +87,35 @@ def _ml_record_signal(code, name, period, signal_type, details, analysis):
                 time.sleep(1)
     return {'prob': None, 'potential': None, 'gain': None}
 
+# ==================== ML 涨幅图标阈值（与周报端共用 ml_thresholds.json，缺失回退旧默认） ====================
+# 训练时由 shadow_learner 导出 gain.top20/top30；周报端 weekly_ml_report.py 已使用同一份文件。
+# 读不到文件或字段时回退旧默认 (67, 60)，保证旧环境不报错。
+_THRESHOLDS_FILE = os.path.join(PARENT_DIR, 'ml', 'ml_thresholds.json')
+
+
+def _gain_cuts() -> tuple:
+    """读取涨幅排序分的两档阈值 (top20=🔥线, top30=⭐线)；文件缺失/损坏回退 (67, 60)。"""
+    try:
+        with open(_THRESHOLDS_FILE, 'r', encoding='utf-8') as f:
+            gain = (json.load(f) or {}).get('gain', {})
+        return (
+            float(gain.get('top20', 67) or 67),
+            float(gain.get('top30', 60) or 60),
+        )
+    except Exception:
+        return 67.0, 60.0
+
+
+def _gain_icon(ml_gain: float) -> str:
+    """涨幅图标：>=Top20线 🔥，>=Top30线 ⭐，否则 💡（阈值随训练动态更新）"""
+    fire, warm = _gain_cuts()
+    if ml_gain >= fire:
+        return '🔥'
+    if ml_gain >= warm:
+        return '⭐'
+    return '💡'
+
+
 def _get_probability_color(probability: float) -> str:
     """根据概率返回 HTML 颜色代码
 
@@ -595,7 +624,7 @@ def run_scan(period_cfg: dict, stock_list: list, webhook: str, secret: str, dedu
                     ml_parts.append(f"🌱 **潜力**{ml_potential}%")
                 ml_gain = ml_result.get('gain')
                 if ml_gain is not None:
-                    gain_icon = '🔥' if ml_gain >= 67 else ('⭐' if ml_gain >= 60 else '💡')
+                    gain_icon = _gain_icon(ml_gain)
                     ml_parts.append(f"{gain_icon} **涨幅**{ml_gain}")
                 rule = _calc_rule_match(period_name, details, analysis)
                 ml_parts.append(f"🎯 **{_format_rule_text(rule)}**")
@@ -718,6 +747,7 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             if mp:
                 rs = mp.get('relative_strength', 0)
                 row2_parts.append(f"RS{rs:+.1f}%")
+                row2_parts.append(f"量比{mp.get('vol_ratio', 0):.2f}x")
             if row2_parts:
                 lines.append("  ↳ " + "  ".join(row2_parts))
 
@@ -736,7 +766,7 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
             if ml_potential is not None:
                 row3_parts.append(f"🌱潜力{ml_potential}%")
             if ml_gain is not None:
-                gain_icon = '🔥' if ml_gain >= 67 else ('⭐' if ml_gain >= 60 else '💡')
+                gain_icon = _gain_icon(ml_gain)
                 row3_parts.append(f"{gain_icon}涨幅{ml_gain}")
             row3_parts.append(f"🎯{_format_rule_text(rule)}")
             lines.append("  ↳ " + "  ".join(row3_parts))

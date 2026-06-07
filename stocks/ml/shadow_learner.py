@@ -1099,6 +1099,33 @@ def _save_report(bundle: Dict, labeled: List[Dict], y, feature_fields: List[str]
             potential_rate = s['potential'] / s['total'] if s['total'] else 0
             lines.append(f"| {t} | {s['total']} | {s['hit']} | {rate:.1%} | {s['potential']} | {potential_rate:.1%} |")
 
+    # ── 按成功率评分等级（验证 6 维评分的区分度：等级越高达标率应越高）──
+    lines.append(f"\n### 按成功率评分等级分布")
+    lines.append("验证 6 维成功率评分有没有用：理想情况下 S→D 净赚率应单调下降；若某高等级反而低于低等级（倒挂），说明该档评分失真，需回 `stock_analyzer.py` 调权重。")
+    lines.append("")
+    lines.append(f"| 评分等级 | 总信号 | 净赚数 | 净赚率(>{SHORTLINE_PROFIT_THRESHOLD_PCT:.0f}%) | 大涨数 | 大涨率(>={POTENTIAL_GAIN_THRESHOLD_PCT:.0f}%) |")
+    lines.append("|----------|--------|--------|--------|----------|----------|")
+    grade_order = ['S', 'A', 'B', 'C', 'D']
+    grade_stats = defaultdict(lambda: {'total': 0, 'hit': 0, 'potential': 0})
+    for r in labeled:
+        g = (r.get('sr_grade') or '?')
+        grade_stats[g]['total'] += 1
+        grade_stats[g]['hit'] += _is_win(r)
+        grade_stats[g]['potential'] += 1 if float(r.get('max_gain_pct') or 0) >= POTENTIAL_GAIN_THRESHOLD_PCT else 0
+    grade_shown = []
+    for g in grade_order:
+        if g in grade_stats:
+            s = grade_stats[g]
+            rate = s['hit'] / s['total'] if s['total'] else 0
+            potential_rate = s['potential'] / s['total'] if s['total'] else 0
+            lines.append(f"| {g}级 | {s['total']} | {s['hit']} | {rate:.1%} | {s['potential']} | {potential_rate:.1%} |")
+            grade_shown.append(g)
+    for g, s in sorted(grade_stats.items()):
+        if g not in grade_shown:
+            rate = s['hit'] / s['total'] if s['total'] else 0
+            potential_rate = s['potential'] / s['total'] if s['total'] else 0
+            lines.append(f"| {g} | {s['total']} | {s['hit']} | {rate:.1%} | {s['potential']} | {potential_rate:.1%} |")
+
     # ── 分类模型 ──
     lines.append(f"\n---\n## 二、短线胜率模型")
     lines.append(f"\n任务：预测信号发出后{OUTCOME_DAYS}个交易日，持有到期(收盘价)净收益能否 > {SHORTLINE_PROFIT_THRESHOLD_PCT:.0f}%。")
