@@ -58,7 +58,7 @@ _ANTI_DETECT = """
 _BLOCK_WORDS = ("验证码", "频繁访问", "访问过于", "拒绝访问", "请先登录", "Access Denied")
 
 _TIMEOUT_MS = 20000
-_RENDER_WAIT = (2.0, 3.5)   # 页面渲染等待区间（秒）
+_MAX_RENDER_WAIT = 12.0   # 轮询等待数据渲染的最长秒数（CI 跨境网络慢，需足够余量）
 
 
 class _BrowserSession:
@@ -121,28 +121,48 @@ class _BrowserSession:
             return None
 
     def fetch(self, code: str) -> Optional[Dict[str, float]]:
-        """抓取单只股票资金流向，返回 dict 或 None。"""
+        """抓取单只股票资金流向，返回 dict 或 None。带重试+轮询等待数据渲染。"""
         with self._lock:
             page = self._ensure_page()
             if page is None:
                 return None
-            try:
-                page.goto(
-                    _PAGE_URL.format(code=code),
-                    wait_until="domcontentloaded",
-                    timeout=_TIMEOUT_MS,
-                )
-                time.sleep(random.uniform(*_RENDER_WAIT))
-                body = page.locator("body").inner_text(timeout=8000)
-            except Exception as e:
-                logger.debug(f"浏览器抓取 {code} 失败: {e}")
-                return None
 
-            if any(w in body for w in _BLOCK_WORDS):
-                logger.warning(f"浏览器备用源疑似被限流/拦截 ({code})")
-                return None
+            # 最多尝试 2 轮（CI 跨境网络慢，首轮可能渲染不全）
+            for attempt in range(2):
+                try:
+                    page.goto(
+                        _PAGE_URL.format(code=code),
+                        wait_until="domcontentloaded",
+                        timeout=_TIMEOUT_MS,
+                    )
+                    # 轮询等待：直到页面出现"主力净流入"文字（数据已渲染）或超时。
+                    # 比固定 sleep 更稳：快网络立即返回，慢网络（CI）多等一会。
+                    body = ""
+                    deadline = time.time() + _MAX_RENDER_WAIT
+                    while time.time() < deadline:
+                        time.sleep(0.6)
+                        try:
+                            body = page.locator("body").inner_text(timeout=5000)
+                        except Exception:
+                            body = ""
+                            continue
+                        if "主力净流入" in body:
+                            break
+                except Exception as e:
+                    logger.debug(f"浏览器抓取 {code} 失败 (第{attempt+1}次): {e}")
+                    body = ""
 
-            return _parse_fund_page(body)
+                if any(w in body for w in _BLOCK_WORDS):
+                    logger.warning(f"浏览器备用源疑似被限流/拦截 ({code})")
+                    return None
+
+                result = _parse_fund_page(body)
+                if result is not None:
+                    return result
+                # 解析失败（数据没渲染出来），下一轮重试
+                logger.debug(f"浏览器 {code} 第{attempt+1}次未解析到数据，重试")
+
+            return None
 
     def close(self) -> None:
         for obj_name in ("_page", "_context", "_browser"):
