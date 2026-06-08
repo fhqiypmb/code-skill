@@ -56,7 +56,7 @@ _ANTI_DETECT = """
 _BLOCK_WORDS = ("验证码", "频繁访问", "访问过于", "拒绝访问", "请先登录", "Access Denied")
 
 _TIMEOUT_MS = 30000
-_MAX_RENDER_WAIT = 20.0   # 轮询等待数据渲染的最长秒数（CI 跨境网络慢，需足够余量）
+_MAX_RENDER_WAIT = 25.0   # 轮询等待数据渲染的最长秒数（CI 跨境网络慢，含 reload 余量）
 _MAX_ATTEMPTS = 3         # 抓取重试轮数（尽量保证拿到数据）
 
 
@@ -94,6 +94,23 @@ def _fetch_once(code: str) -> Optional[Dict[str, float]]:
             )
             context.add_init_script(_ANTI_DETECT)
             page = context.new_page()
+
+            # 诊断：监听页面发起的资金数据请求，记录状态+响应体长度。
+            # 用于判断"数据区不渲染"是 接口被挡(状态非200/空) 还是 纯渲染问题。
+            data_xhr = []
+            def _on_response(r):
+                u = r.url
+                if any(k in u for k in ("fflow", "f137", "f140", "fund", "zjlx", "ccb")):
+                    try:
+                        blen = len(r.body())
+                    except Exception:
+                        blen = -1
+                    data_xhr.append(f"{r.status}/{blen}")
+            try:
+                page.on("response", _on_response)
+            except Exception:
+                pass
+
             resp = page.goto(
                 _PAGE_URL.format(code=code),
                 wait_until="domcontentloaded",
@@ -101,10 +118,19 @@ def _fetch_once(code: str) -> Optional[Dict[str, float]]:
             )
             goto_ok = True
             http_status = resp.status if resp else None
-            # 轮询等待真实数据渲染：直到能解析出资金数据为止（而非仅含"主力净流入"
-            # 关键词——该词在页面顶部静态骨架里就有，CI慢时会被提前误判为已渲染）。
+
+            # 等待数据区渲染：东财页面靠 JS 异步加载资金数据，CI 慢时数据区
+            # 迟迟不出（body 只有顶部骨架 ~1800 字）。策略：
+            #   1) 先等 networkidle（数据 XHR 完成）
+            #   2) 轮询解析，期间若长时间仍是骨架则主动 reload 重新触发渲染
             parsed = None
+            try:
+                page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
+            except Exception:
+                pass
+
             deadline = time.time() + _MAX_RENDER_WAIT
+            last_reload = time.time()
             while time.time() < deadline:
                 time.sleep(0.6)
                 try:
@@ -115,12 +141,20 @@ def _fetch_once(code: str) -> Optional[Dict[str, float]]:
                 parsed = _parse_fund_page(body)
                 if parsed is not None:
                     break
-            # 诊断：打印 HTTP 状态、body 长度与解析结果（定位 CI 失败原因）
+                # 卡在骨架（数据区没出来）超过 6 秒就 reload 重新触发
+                if len(body) < 3000 and time.time() - last_reload > 6:
+                    try:
+                        page.reload(wait_until="domcontentloaded", timeout=_TIMEOUT_MS)
+                    except Exception:
+                        pass
+                    last_reload = time.time()
+            # 诊断：打印 HTTP 状态、body 长度、解析结果、数据XHR情况
             logger.info(
                 f"[浏览器诊断] {code} http={http_status} "
                 f"goto_ok={goto_ok} body_len={len(body)} "
                 f"解析成功={parsed is not None} "
-                f"摘要={body[:120].replace(chr(10), ' ')!r}"
+                f"数据XHR={data_xhr[:5]} "
+                f"摘要={body[:80].replace(chr(10), ' ')!r}"
             )
         except Exception as e:
             err_msg = f"{type(e).__name__}: {e}"
