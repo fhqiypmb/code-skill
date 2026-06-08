@@ -483,7 +483,10 @@ def _format_analysis_for_dingtalk(analysis: dict, details: dict = None) -> str:
 
     # 主力资金 + 量比
     cap_parts = []
-    if capital:
+    # 资金来源标签：api=东财接口 / browser=浏览器降级 / failed=未取到
+    _CAP_SRC_TAG = {'api': '接口', 'browser': '浏览器', 'failed': '获取失败'}
+    cap_src = capital.get('source', '') if capital else ''
+    if capital and cap_src != 'failed':
         main_in = capital.get('main_net_in', 0)
         flow    = capital.get('flow_ratio', 0)
         big_in  = capital.get('big_net_in', 0)
@@ -498,7 +501,11 @@ def _format_analysis_for_dingtalk(analysis: dict, details: dict = None) -> str:
     if mp:
         cap_parts.append(f"量比 {mp.get('vol_ratio', 1):.2f}x")
     if cap_parts:
-        lines.append("💰 " + "  ".join(cap_parts))
+        src_tag = _CAP_SRC_TAG.get(cap_src, '')
+        src_suffix = f"  〔{src_tag}〕" if src_tag else ''
+        lines.append("💰 " + "  ".join(cap_parts) + src_suffix)
+    elif cap_src == 'failed':
+        lines.append("💰 资金数据获取失败 〔接口与浏览器均失败〕")
 
     # 金叉 & 确认日期
     if details:
@@ -753,11 +760,21 @@ def _format_round_summary(all_signals: list, round_num: int) -> str:
 
             # 第3行：动能 + 主力资金 + 大单 + ML胜率/潜力 + 规则匹配度
             rule = _calc_rule_match(period, d, analysis)
+            # 资金来源标签：接口 / 浏览器 / 失败
+            _cap = analysis.get('capital', {}) if analysis else {}
+            _cap_src = _cap.get('source', '')
+            _cap_src_tag = {'api': '接口', 'browser': '浏览器', 'failed': '失败'}.get(_cap_src, '')
+            _main_str = (f"主力{rule['main_in']:+.0f}万({rule['flow']:+.1f}%)"
+                         if _cap_src != 'failed'
+                         else "主力获取失败")
             row3_parts = [
                 f"动能{rule['momentum']:.0f}",
-                f"主力{rule['main_in']:+.0f}万({rule['flow']:+.1f}%)",
-                f"大单{rule['big_in']:+.0f}万",
+                _main_str,
+                f"大单{rule['big_in']:+.0f}万" if _cap_src != 'failed' else "",
             ]
+            if _cap_src_tag:
+                row3_parts.append(f"〔{_cap_src_tag}〕")
+            row3_parts = [p for p in row3_parts if p]
             ml_prob = s.get('ml_prob')
             ml_potential = s.get('ml_potential')
             ml_gain = s.get('ml_gain')

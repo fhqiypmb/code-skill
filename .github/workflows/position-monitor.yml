@@ -44,6 +44,10 @@ jobs:
       - name: Install deps
         run: pip install -r stocks/requirements.txt
 
+      - name: Install Chromium for browser fallback
+        # 持仓盯盘同样调用 fetch_capital_flow，东财限流时降级 Playwright 浏览器源，需安装 Chromium。
+        run: python -m playwright install --with-deps chromium
+
       - name: Run position monitor
         timeout-minutes: 400
         env:

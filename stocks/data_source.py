@@ -101,6 +101,7 @@ class CapitalFlow(TypedDict):
     super_net_in: float   # 超大单净流入（万元）
     big_net_in: float     # 大单净流入（万元）
     flow_ratio: float     # 主力净流入强度（%）
+    source: str           # 数据来源: 'api'(东财API) / 'browser'(浏览器降级) / 'failed'(全失败)
 
 
 class StockIndustry(TypedDict):
@@ -1005,6 +1006,7 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
         "super_net_in": 0.0,
         "big_net_in": 0.0,
         "flow_ratio": 0.0,
+        "source": "failed",
     }
     api_throttled = False  # 标记是否疑似被限流，决定是否降级浏览器源
     try:
@@ -1069,6 +1071,7 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
             "super_net_in": super_net,
             "big_net_in":   big_net,
             "flow_ratio":   flow_ratio,
+            "source":       "api",
         }
     except Exception as e:
         # API 出任何异常（限流/HTTP 5xx/连接断开/超时/解析失败...）都视为"没拿到数据"，
@@ -1106,7 +1109,7 @@ def _fetch_capital_flow_browser(code: str) -> Optional[CapitalFlow]:
     try:
         data = fetch_capital_flow_browser(code)
     except Exception as e:
-        logger.warning(f"[资金流向诊断] 浏览器源运行异常 {code} ({type(e).__name__}): {e}")
+        logger.debug(f"浏览器资金流向源运行异常 {code} ({type(e).__name__}): {e}")
         return None
 
     if not data:
@@ -1116,6 +1119,7 @@ def _fetch_capital_flow_browser(code: str) -> Optional[CapitalFlow]:
         "super_net_in": float(data.get("super_net_in", 0.0)),
         "big_net_in":   float(data.get("big_net_in", 0.0)),
         "flow_ratio":   float(data.get("flow_ratio", 0.0)),
+        "source":       "browser",
     }
 
 
