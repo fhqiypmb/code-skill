@@ -98,6 +98,11 @@ jobs:
         # 依赖锁定在 stocks/requirements.txt（本地与 CI 共用），避免版本漂移
         run: pip install -r stocks/requirements.txt
 
+      - name: Install Chromium for browser fallback
+        # 资金流向 API 限流时降级到 Playwright 浏览器源，需安装 Chromium 内核及系统依赖。
+        # --with-deps 自动装 Linux 运行所需的系统库（仅 ubuntu runner 需要）。
+        run: python -m playwright install --with-deps chromium
+
       - name: Run monitor
         timeout-minutes: 340
         env:

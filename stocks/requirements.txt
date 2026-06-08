@@ -6,3 +6,5 @@ numpy==2.4.1
 joblib==1.5.3
 pyyaml
 akshare
+# 资金流向浏览器备用源（API 限流时降级）。需配合 `playwright install chromium`。
+playwright==1.58.0

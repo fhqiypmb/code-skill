@@ -1006,6 +1006,7 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
         "big_net_in": 0.0,
         "flow_ratio": 0.0,
     }
+    api_throttled = False  # 标记是否疑似被限流，决定是否降级浏览器源
     try:
         market = 1 if code.startswith(('6', '9')) else 0
         _eastmoney_limiter.wait()
@@ -1025,6 +1026,11 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
                 return round(v / 10000, 2)
             except (TypeError, ValueError):
                 return 0.0
+
+        # 关键字段缺失（None）通常意味被限流/无数据，需降级浏览器源
+        if info.get("f137") is None and info.get("f48") is None:
+            api_throttled = True
+            raise RuntimeError("push2 资金流向字段为空，疑似限流")
 
         main_net  = _to_wan(info.get("f137"))   # 主力净流入（万元）
         super_net = _to_wan(info.get("f140"))   # 超大单净流入（万元）
@@ -1047,11 +1053,43 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
         }
     except Exception as e:
         err_str = str(e)
-        if any(c in err_str for c in ('456', '403', '429', '503', 'RemoteDisconnected')):
+        if api_throttled or any(c in err_str for c in ('456', '403', '429', '503', 'RemoteDisconnected')):
             _eastmoney_limiter.report_throttled()
             _record_throttle('fetch_capital_flow')
+            # ---- 降级：浏览器备用源 ----
+            browser_result = _fetch_capital_flow_browser(code)
+            if browser_result is not None:
+                logger.info(f"使用浏览器备用源获取资金流向: {code}")
+                _record_throttle('fetch_capital_flow_browser_used')
+                return browser_result
         logger.debug(f"主力资金流向获取失败 {code}: {e}")
         return empty
+
+
+def _fetch_capital_flow_browser(code: str) -> Optional[CapitalFlow]:
+    """
+    浏览器备用源桥接：API 限流时调用 fund_flow_browser 模块。
+    flow_ratio 直接采用页面"主力净比"（与 API 口径基本一致）。
+    返回 CapitalFlow 或 None（不可用/失败）。
+    """
+    try:
+        from fund_flow_browser import fetch_capital_flow_browser
+    except ImportError:
+        try:
+            from .fund_flow_browser import fetch_capital_flow_browser  # type: ignore
+        except ImportError:
+            logger.debug("fund_flow_browser 模块不可用，跳过浏览器备用源")
+            return None
+
+    data = fetch_capital_flow_browser(code)
+    if not data:
+        return None
+    return {
+        "main_net_in":  float(data.get("main_net_in", 0.0)),
+        "super_net_in": float(data.get("super_net_in", 0.0)),
+        "big_net_in":   float(data.get("big_net_in", 0.0)),
+        "flow_ratio":   float(data.get("flow_ratio", 0.0)),
+    }
 
 
 # ==================== 10. 测试入口 ====================
