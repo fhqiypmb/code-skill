@@ -1,0 +1,43 @@
+name: 持仓盯盘
+
+on:
+  # 持仓盯盘：交易日每30分钟触发一次，跑完即退（北京时间 09:30-15:00 时段）
+  # UTC 对应：上午 01:30,02:00,02:30,03:00,03:30(北京09:30-11:30) + 下午 05:00,05:30,06:00,06:30,07:00(北京13:00-15:00)
+  schedule:
+    - cron: '30,0 1-3 * * 1-5'   # 上午时段：UTC 01:30~03:30 每半小时（北京 09:30~11:30）
+    - cron: '0,30 5-6 * * 1-5'   # 下午时段：UTC 05:00~06:30 每半小时（北京 13:00~14:30）
+    - cron: '0 7 * * 1-5'        # 收盘轮：UTC 07:00（北京 15:00）
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 独立 concurrency group：新一轮不取消上一轮（盯盘很快，让它跑完）
+concurrency:
+  group: position-monitor
+  cancel-in-progress: false
+
+jobs:
+  # 持仓盯盘任务：交易时段每30分钟触发一次，跑一轮即退
+  position-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install -r stocks/requirements.txt
+
+      - name: Run position monitor
+        env:
+          POSITION_DINGTALK_WEBHOOK: ${{ secrets.POSITION_DINGTALK_WEBHOOK }}
+          POSITION_DINGTALK_SECRET: ${{ secrets.POSITION_DINGTALK_SECRET }}
+        run: python -u stocks/position_monitor/position_monitor.py --now

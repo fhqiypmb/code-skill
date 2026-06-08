@@ -413,7 +413,8 @@ def _interruptible_sleep(seconds: int) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description='持仓盯盘')
-    parser.add_argument('--now', action='store_true', help='立即跑一轮')
+    parser.add_argument('--now', action='store_true', help='立即跑一轮（仍会跳过非交易日）')
+    parser.add_argument('--force', action='store_true', help='强制跑一轮，无视交易日判断（纯本地测试用）')
     args = parser.parse_args()
 
     # 持仓盯盘用独立的钉钉机器人（与选股信号分开推送）；未配置则仅控制台输出
@@ -423,6 +424,11 @@ def main():
         logger.warning("未配置持仓盯盘钉钉（POSITION_DINGTALK_WEBHOOK/SECRET），仅控制台输出")
 
     if args.now:
+        # --now 也要挡掉非交易日（法定节假日落在周一~周五时，cron 仍会触发）；
+        # 纯本地测试可用 --force 无视该判断
+        if not args.force and not is_trading_day():
+            logger.info("非交易日，退出")
+            return
         run_one_round(webhook, secret, 1)
         return
 
