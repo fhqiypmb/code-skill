@@ -1027,10 +1027,12 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
             except (TypeError, ValueError):
                 return 0.0
 
-        # 关键字段缺失（None）通常意味被限流/无数据，需降级浏览器源
-        if info.get("f137") is None and info.get("f48") is None:
-            api_throttled = True
-            raise RuntimeError("push2 资金流向字段为空，疑似限流")
+        def _num(val: object):
+            """转 float，无法转返回 None（区分'真0'与'缺失/占位'）"""
+            try:
+                return float(val)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return None
 
         main_net  = _to_wan(info.get("f137"))   # 主力净流入（万元）
         super_net = _to_wan(info.get("f140"))   # 超大单净流入（万元）
@@ -1038,6 +1040,16 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
 
         # 成交额（元）→ 万元
         amount_wan = _to_wan(info.get("f48"))
+
+        # 限流/无数据判定：成交额是资金流向最可靠的"活性"信号。
+        # 正常交易的股票成交额不可能为 0/None；若成交额无效，
+        # 说明被限流或返回了占位值（字段全 0），此时降级浏览器源。
+        # （注意：东财限流常返回 f137=0、f48=0 的占位值，而非 None，
+        #   旧判据 `is None` 在这种情况下会漏判，导致资金错误地显示为 0。）
+        amt = _num(info.get("f48"))
+        if amt is None or amt <= 0:
+            api_throttled = True
+            raise RuntimeError("push2 资金流向成交额为0/缺失，疑似限流或占位值")
 
         # 强度 = 主力净流入 / 成交额，成交额为 0 时取 0
         if amount_wan > 0:
@@ -1052,8 +1064,20 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
             "flow_ratio":   flow_ratio,
         }
     except Exception as e:
+        # 注意：连接被掐断的异常 str(e) 是 "Remote end closed connection..."，
+        # 不含 "RemoteDisconnected" 字样（那是类型名）。必须同时匹配类型名+消息，
+        # 否则限流时无法触发降级（这是资金流向长期显示 0 的根因）。
         err_str = str(e)
-        if api_throttled or any(c in err_str for c in ('456', '403', '429', '503', 'RemoteDisconnected')):
+        err_type = type(e).__name__
+        is_throttled = (
+            api_throttled
+            or any(c in err_str for c in ('456', '403', '429', '503'))
+            or err_type in ('RemoteDisconnected', 'ConnectionResetError',
+                            'IncompleteRead', 'ConnectionAbortedError')
+            or any(w in err_str for w in ('Remote end closed', 'Connection reset',
+                                          'forcibly closed'))
+        )
+        if is_throttled:
             _eastmoney_limiter.report_throttled()
             _record_throttle('fetch_capital_flow')
             # ---- 降级：浏览器备用源 ----
@@ -1062,7 +1086,7 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
                 logger.info(f"使用浏览器备用源获取资金流向: {code}")
                 _record_throttle('fetch_capital_flow_browser_used')
                 return browser_result
-        logger.debug(f"主力资金流向获取失败 {code}: {e}")
+        logger.debug(f"主力资金流向获取失败 {code} ({err_type}): {e}")
         return empty
 
 
