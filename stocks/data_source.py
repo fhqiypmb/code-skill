@@ -1071,18 +1071,20 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
             "flow_ratio":   flow_ratio,
         }
     except Exception as e:
-        # 注意：连接被掐断的异常 str(e) 是 "Remote end closed connection..."，
-        # 不含 "RemoteDisconnected" 字样（那是类型名）。必须同时匹配类型名+消息，
-        # 否则限流时无法触发降级（这是资金流向长期显示 0 的根因）。
+        # 限流/被挡的多种表现，必须全覆盖，否则资金降级不触发（资金显示0的根因）：
+        #  - 本地 IP：连接被掐断 RemoteDisconnected，str(e)="Remote end closed..."（不含类型名）
+        #  - CI(GitHub 美国 IP) 跨境访问东财：返回 HTTP 502/500/504 网关错误
+        #  - 其他：456/403/429/503
         err_str = str(e)
         err_type = type(e).__name__
         is_throttled = (
             api_throttled
-            or any(c in err_str for c in ('456', '403', '429', '503'))
+            or any(c in err_str for c in ('456', '403', '429', '500', '502', '503', '504'))
             or err_type in ('RemoteDisconnected', 'ConnectionResetError',
                             'IncompleteRead', 'ConnectionAbortedError')
             or any(w in err_str for w in ('Remote end closed', 'Connection reset',
-                                          'forcibly closed'))
+                                          'forcibly closed', 'Bad Gateway',
+                                          'Gateway Time-out', 'Service Unavailable'))
         )
         if is_throttled:
             _eastmoney_limiter.report_throttled()
