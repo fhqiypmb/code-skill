@@ -156,6 +156,15 @@ def _is_ci() -> bool:
     return os.environ.get('CI') == 'true' or os.environ.get('GITHUB_ACTIONS') == 'true'
 
 
+def _git_sync_enabled() -> bool:
+    """
+    是否启用 ML 数据的 git 同步（pull/commit/push）。
+    本地默认关闭（避免 git 子进程卡死/拖慢，且本地无需同步回仓库），
+    仅在显式设置环境变量 ML_GIT_SYNC=1 时启用。CI 环境不走本地同步逻辑。
+    """
+    return os.environ.get('ML_GIT_SYNC') == '1'
+
+
 def record_signal(
     code: str,
     name: str,
@@ -173,8 +182,8 @@ def record_signal(
     today = datetime.now().strftime('%Y-%m-%d')
 
     # CI 环境：checkout 拿到的可能是旧版本，需要与当前文件合并（避免覆盖本地已有数据）
-    # 本地环境：git pull 拿最新数据再合并
-    data = _load_data() if _is_ci() else _pull_and_merge()
+    # 启用 git 同步时才 pull 合并远端；否则直接读本地（避免 git 卡死/拖慢）
+    data = _pull_and_merge() if _git_sync_enabled() else _load_data()
 
     # 去重：同一天同股票同周期同信号类型只写一次
     if _is_duplicate(data, today, code, period, signal_type):
@@ -265,7 +274,7 @@ def record_signal(
     }
 
     data.append(record)
-    _save_data(data, auto_push=not _is_ci())
+    _save_data(data, auto_push=_git_sync_enabled())
     logger.info(f"ML记录: {today} {code} {name} [{period}][{signal_type}] 共{len(record)}个字段")
     return record
 

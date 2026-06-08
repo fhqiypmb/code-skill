@@ -1,8 +1,11 @@
 # DeepVCode clipboard
 .deepvcode/clipboard/
-__pycache__/  
-.easycode/  
-.opencode/  
-# Weekly ML report  
-stocks/ml/weekly_report/weekly_ml_report.md  
-stocks/ml/weekly_report/weekly_ml_report.html  
+__pycache__/
+.easycode/
+.opencode/
+# Weekly ML report
+stocks/ml/weekly_report/weekly_ml_report.md
+stocks/ml/weekly_report/weekly_ml_report.html
+# 本地启动脚本（含钉钉密钥明文，禁止提交）
+本地启动.bat
+*.bat
