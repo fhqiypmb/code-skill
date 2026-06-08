@@ -55,8 +55,8 @@ _ANTI_DETECT = """
 # 限流/异常关键词
 _BLOCK_WORDS = ("验证码", "频繁访问", "访问过于", "拒绝访问", "请先登录", "Access Denied")
 
-_TIMEOUT_MS = 20000
-_MAX_RENDER_WAIT = 12.0   # 轮询等待数据渲染的最长秒数（CI 跨境网络慢，需足够余量）
+_TIMEOUT_MS = 30000
+_MAX_RENDER_WAIT = 20.0   # 轮询等待数据渲染的最长秒数（CI 跨境网络慢，需足够余量）
 _MAX_ATTEMPTS = 3         # 抓取重试轮数（尽量保证拿到数据）
 
 
@@ -101,7 +101,9 @@ def _fetch_once(code: str) -> Optional[Dict[str, float]]:
             )
             goto_ok = True
             http_status = resp.status if resp else None
-            # 轮询等待数据渲染：出现"主力净流入"即可，最长 _MAX_RENDER_WAIT 秒
+            # 轮询等待真实数据渲染：直到能解析出资金数据为止（而非仅含"主力净流入"
+            # 关键词——该词在页面顶部静态骨架里就有，CI慢时会被提前误判为已渲染）。
+            parsed = None
             deadline = time.time() + _MAX_RENDER_WAIT
             while time.time() < deadline:
                 time.sleep(0.6)
@@ -110,14 +112,15 @@ def _fetch_once(code: str) -> Optional[Dict[str, float]]:
                 except Exception:
                     body = ""
                     continue
-                if "主力净流入" in body:
+                parsed = _parse_fund_page(body)
+                if parsed is not None:
                     break
-            # 诊断：打印 HTTP 状态、body 长度与摘要（定位 CI 失败原因）
+            # 诊断：打印 HTTP 状态、body 长度与解析结果（定位 CI 失败原因）
             logger.info(
                 f"[浏览器诊断] {code} http={http_status} "
                 f"goto_ok={goto_ok} body_len={len(body)} "
-                f"含主力净流入={'主力净流入' in body} "
-                f"摘要={body[:150].replace(chr(10), ' ')!r}"
+                f"解析成功={parsed is not None} "
+                f"摘要={body[:120].replace(chr(10), ' ')!r}"
             )
         except Exception as e:
             err_msg = f"{type(e).__name__}: {e}"
