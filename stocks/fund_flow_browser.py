@@ -295,7 +295,14 @@ def fetch_capital_flow_browser(code: str) -> Optional[Dict[str, float]]:
 
 if __name__ == "__main__":
     import sys
-    logging.basicConfig(level=logging.INFO)
-    test_code = sys.argv[1] if len(sys.argv) > 1 else "300290"
-    print(f"测试浏览器备用源: {test_code}")
-    print(fetch_capital_flow_browser(test_code))
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    # 支持多个代码：python fund_flow_browser.py 300290 600519 000001 ...
+    codes = sys.argv[1:] or ["300290", "600519", "000001", "301368", "600879"]
+    print(f"=== 浏览器备用源连续测试 {len(codes)} 只 ===")
+    ok = 0
+    for i, c in enumerate(codes, 1):
+        r = fetch_capital_flow_browser(c)
+        if r:
+            ok += 1
+        print(f"#{i} {c} -> {r}")
+    print(f"=== 成功 {ok}/{len(codes)} ===")
