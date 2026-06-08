@@ -1019,9 +1019,9 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
         data = _http_get_json(url, headers={"Referer": "https://quote.eastmoney.com"})
         info = data.get("data", {}) or {}
 
-        # 诊断日志（定位 CI 限流行为；稳定后可降级为 debug）
-        logger.info(
-            f"[资金流向诊断] {code} API返回 "
+        # 诊断日志（debug 级，平时不显示，排查时开启）
+        logger.debug(
+            f"[资金流向] {code} API返回 "
             f"f48(成交额)={info.get('f48')} f137(主力)={info.get('f137')} "
             f"f140={info.get('f140')} f143={info.get('f143')}"
         )
@@ -1071,35 +1071,20 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
             "flow_ratio":   flow_ratio,
         }
     except Exception as e:
-        # 限流/被挡的多种表现，必须全覆盖，否则资金降级不触发（资金显示0的根因）：
-        #  - 本地 IP：连接被掐断 RemoteDisconnected，str(e)="Remote end closed..."（不含类型名）
-        #  - CI(GitHub 美国 IP) 跨境访问东财：返回 HTTP 502/500/504 网关错误
-        #  - 其他：456/403/429/503
-        err_str = str(e)
+        # API 出任何异常（限流/HTTP 5xx/连接断开/超时/解析失败...）都视为"没拿到数据"，
+        # 一律降级浏览器源。无需维护错误码名单——东财换任何错误码都不会漏。
+        # （历史坑：本地限流是 RemoteDisconnected，CI 限流是 HTTP 502，错误码各不相同。）
         err_type = type(e).__name__
-        is_throttled = (
-            api_throttled
-            or any(c in err_str for c in ('456', '403', '429', '500', '502', '503', '504'))
-            or err_type in ('RemoteDisconnected', 'ConnectionResetError',
-                            'IncompleteRead', 'ConnectionAbortedError')
-            or any(w in err_str for w in ('Remote end closed', 'Connection reset',
-                                          'forcibly closed', 'Bad Gateway',
-                                          'Gateway Time-out', 'Service Unavailable'))
-        )
-        if is_throttled:
-            _eastmoney_limiter.report_throttled()
-            _record_throttle('fetch_capital_flow')
-            logger.info(f"[资金流向诊断] {code} 判定限流({err_type})，尝试浏览器降级")
-            # ---- 降级：浏览器备用源 ----
-            browser_result = _fetch_capital_flow_browser(code)
-            if browser_result is not None:
-                logger.info(f"使用浏览器备用源获取资金流向: {code} -> {browser_result}")
-                _record_throttle('fetch_capital_flow_browser_used')
-                return browser_result
-            logger.warning(f"[资金流向诊断] {code} 浏览器降级返回空，最终资金为0")
-        else:
-            logger.warning(f"[资金流向诊断] {code} 未判定限流但异常({err_type}): {e}")
-        logger.debug(f"主力资金流向获取失败 {code} ({err_type}): {e}")
+        _eastmoney_limiter.report_throttled()
+        _record_throttle('fetch_capital_flow')
+        logger.debug(f"资金流向API异常 {code} ({err_type}): {e}，尝试浏览器降级")
+        # ---- 降级：浏览器备用源 ----
+        browser_result = _fetch_capital_flow_browser(code)
+        if browser_result is not None:
+            logger.info(f"使用浏览器备用源获取资金流向: {code} -> {browser_result}")
+            _record_throttle('fetch_capital_flow_browser_used')
+            return browser_result
+        logger.debug(f"资金流向降级浏览器仍失败 {code}，返回空")
         return empty
 
 
