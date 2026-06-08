@@ -1019,6 +1019,13 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
         data = _http_get_json(url, headers={"Referer": "https://quote.eastmoney.com"})
         info = data.get("data", {}) or {}
 
+        # 诊断日志（定位 CI 限流行为；稳定后可降级为 debug）
+        logger.info(
+            f"[资金流向诊断] {code} API返回 "
+            f"f48(成交额)={info.get('f48')} f137(主力)={info.get('f137')} "
+            f"f140={info.get('f140')} f143={info.get('f143')}"
+        )
+
         def _to_wan(val: object) -> float:
             """元 → 万元，异常值返回 0"""
             try:
@@ -1080,12 +1087,16 @@ def fetch_capital_flow(code: str) -> CapitalFlow:
         if is_throttled:
             _eastmoney_limiter.report_throttled()
             _record_throttle('fetch_capital_flow')
+            logger.info(f"[资金流向诊断] {code} 判定限流({err_type})，尝试浏览器降级")
             # ---- 降级：浏览器备用源 ----
             browser_result = _fetch_capital_flow_browser(code)
             if browser_result is not None:
-                logger.info(f"使用浏览器备用源获取资金流向: {code}")
+                logger.info(f"使用浏览器备用源获取资金流向: {code} -> {browser_result}")
                 _record_throttle('fetch_capital_flow_browser_used')
                 return browser_result
+            logger.warning(f"[资金流向诊断] {code} 浏览器降级返回空，最终资金为0")
+        else:
+            logger.warning(f"[资金流向诊断] {code} 未判定限流但异常({err_type}): {e}")
         logger.debug(f"主力资金流向获取失败 {code} ({err_type}): {e}")
         return empty
 
@@ -1101,11 +1112,16 @@ def _fetch_capital_flow_browser(code: str) -> Optional[CapitalFlow]:
     except ImportError:
         try:
             from .fund_flow_browser import fetch_capital_flow_browser  # type: ignore
-        except ImportError:
-            logger.debug("fund_flow_browser 模块不可用，跳过浏览器备用源")
+        except ImportError as ie:
+            logger.warning(f"[资金流向诊断] fund_flow_browser 导入失败，浏览器源不可用: {ie}")
             return None
 
-    data = fetch_capital_flow_browser(code)
+    try:
+        data = fetch_capital_flow_browser(code)
+    except Exception as e:
+        logger.warning(f"[资金流向诊断] 浏览器源运行异常 {code} ({type(e).__name__}): {e}")
+        return None
+
     if not data:
         return None
     return {
