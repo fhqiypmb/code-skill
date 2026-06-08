@@ -31,9 +31,11 @@ logger = logging.getLogger(__name__)
 _PAGE_URL = "https://data.eastmoney.com/zjlx/{code}.html"
 
 _USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
 ]
 
 _VIEWPORTS = [
@@ -45,10 +47,57 @@ _VIEWPORTS = [
 
 _ANTI_DETECT = """
 (function(){
+    // 基础属性伪装
     Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
     Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});
     Object.defineProperty(navigator,'languages',{get:()=>['zh-CN','zh','en']});
+    Object.defineProperty(navigator,'hardwareConcurrency',{get:()=>8});
+    Object.defineProperty(navigator,'deviceMemory',{get:()=>8});
+    Object.defineProperty(navigator,'platform',{get:()=>'Win32'});
     window.chrome = window.chrome || { runtime: {} };
+
+    // permissions.query 伪装（避免 notification 探测识别 headless）
+    try {
+        const _q = navigator.permissions && navigator.permissions.query;
+        if (_q) {
+            navigator.permissions.query = (p) =>
+                p && p.name === 'notifications'
+                    ? Promise.resolve({state: Notification.permission})
+                    : _q(p);
+        }
+    } catch(e){}
+
+    // WebGL 厂商/型号伪装（WebGL1 + WebGL2）
+    function _spoofGL(proto){
+        if(!proto) return;
+        const _gp = proto.getParameter;
+        proto.getParameter = function(p){
+            if(p===37445) return 'Intel Inc.';
+            if(p===37446) return 'Intel Iris OpenGL Engine';
+            return _gp.call(this, p);
+        };
+    }
+    _spoofGL(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
+    _spoofGL(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
+
+    // Canvas 指纹加噪：toDataURL/getImageData 注入微小随机扰动，每实例指纹不同
+    try {
+        const _toData = HTMLCanvasElement.prototype.toDataURL;
+        HTMLCanvasElement.prototype.toDataURL = function(){
+            const ctx = this.getContext('2d');
+            if (ctx) {
+                const w = this.width, h = this.height;
+                if (w && h) {
+                    const img = ctx.getImageData(0, 0, w, h);
+                    for (let i = 0; i < img.data.length; i += 997) {
+                        img.data[i] = (img.data[i] + (Math.random()*2|0)) & 255;
+                    }
+                    ctx.putImageData(img, 0, 0);
+                }
+            }
+            return _toData.apply(this, arguments);
+        };
+    } catch(e){}
 })();
 """
 
@@ -91,6 +140,15 @@ def _fetch_once(code: str) -> Optional[Dict[str, float]]:
                 user_agent=random.choice(_USER_AGENTS),
                 viewport=random.choice(_VIEWPORTS),
                 locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                extra_http_headers={
+                    # 真实 Referer：模拟从东财行情页跳转而来，降低机器人识别概率
+                    "Referer": "https://quote.eastmoney.com/",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                               "image/avif,image/webp,*/*;q=0.8"),
+                    "Upgrade-Insecure-Requests": "1",
+                },
             )
             context.add_init_script(_ANTI_DETECT)
             page = context.new_page()
