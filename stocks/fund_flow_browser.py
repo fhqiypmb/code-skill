@@ -73,6 +73,8 @@ def _fetch_once(code: str) -> Optional[Dict[str, float]]:
         return None
 
     body = ""
+    goto_ok = False
+    err_msg = ""
     with sync_playwright() as pw:
         browser = None
         try:
@@ -92,11 +94,13 @@ def _fetch_once(code: str) -> Optional[Dict[str, float]]:
             )
             context.add_init_script(_ANTI_DETECT)
             page = context.new_page()
-            page.goto(
+            resp = page.goto(
                 _PAGE_URL.format(code=code),
                 wait_until="domcontentloaded",
                 timeout=_TIMEOUT_MS,
             )
+            goto_ok = True
+            http_status = resp.status if resp else None
             # 轮询等待数据渲染：出现"主力净流入"即可，最长 _MAX_RENDER_WAIT 秒
             deadline = time.time() + _MAX_RENDER_WAIT
             while time.time() < deadline:
@@ -108,8 +112,16 @@ def _fetch_once(code: str) -> Optional[Dict[str, float]]:
                     continue
                 if "主力净流入" in body:
                     break
+            # 诊断：打印 HTTP 状态、body 长度与摘要（定位 CI 失败原因）
+            logger.info(
+                f"[浏览器诊断] {code} http={http_status} "
+                f"goto_ok={goto_ok} body_len={len(body)} "
+                f"含主力净流入={'主力净流入' in body} "
+                f"摘要={body[:150].replace(chr(10), ' ')!r}"
+            )
         except Exception as e:
-            logger.debug(f"浏览器抓取 {code} 失败: {e}")
+            err_msg = f"{type(e).__name__}: {e}"
+            logger.info(f"[浏览器诊断] {code} 抓取异常 goto_ok={goto_ok}: {err_msg}")
             body = ""
         finally:
             if browser is not None:
