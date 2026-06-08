@@ -842,8 +842,6 @@ def _interruptible_sleep(seconds: int):
 def main():
     parser = argparse.ArgumentParser(description='股票信号监控')
     parser.add_argument('--now', action='store_true', help='立即扫描一次（不等交易时间）')
-    parser.add_argument('--limit', type=int, default=0,
-                        help='仅扫描前 N 只股票（测试用，0=全部）')
     args = parser.parse_args()
 
     # 从环境变量读取Token
@@ -858,11 +856,6 @@ def main():
     if not stock_list:
         logger.error("股票列表为空，请确保 stock_list.md 存在")
         sys.exit(1)
-
-    # 测试模式：仅扫描前 N 只（验证浏览器资金降级用，避免全量耗时）
-    if args.limit and args.limit > 0:
-        stock_list = stock_list[:args.limit]
-        logger.info(f"[测试模式] 仅扫描前 {len(stock_list)} 只股票")
 
     dedup = SignalDedup()
 
