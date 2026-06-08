@@ -71,8 +71,6 @@ class _BrowserSession:
     def __init__(self) -> None:
         self._pw = None
         self._browser = None
-        self._context = None
-        self._page = None
         self._available: Optional[bool] = None  # None=未知, True/False=已探测
 
     @classmethod
@@ -83,10 +81,11 @@ class _BrowserSession:
                 atexit.register(cls._instance.close)
             return cls._instance
 
-    def _ensure_page(self):
-        """懒加载浏览器与页面，返回 page 或 None（不可用）。"""
-        if self._page is not None:
-            return self._page
+    def _ensure_browser(self):
+        """懒加载浏览器进程（复用），返回 browser 或 None（不可用）。
+        注意：只保证 Chromium 进程存在，context/page 由 fetch 每股新建并关闭。"""
+        if self._browser is not None:
+            return self._browser
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
@@ -105,16 +104,9 @@ class _BrowserSession:
                     "--disable-dev-shm-usage",
                 ],
             )
-            self._context = self._browser.new_context(
-                user_agent=random.choice(_USER_AGENTS),
-                viewport=random.choice(_VIEWPORTS),
-                locale="zh-CN",
-            )
-            self._context.add_init_script(_ANTI_DETECT)
-            self._page = self._context.new_page()
             self._available = True
             logger.info("浏览器备用源已启动")
-            return self._page
+            return self._browser
         except Exception as e:
             logger.warning(f"浏览器备用源启动失败: {e}")
             self._available = False
@@ -122,23 +114,33 @@ class _BrowserSession:
             return None
 
     def fetch(self, code: str) -> Optional[Dict[str, float]]:
-        """抓取单只股票资金流向，返回 dict 或 None。带重试+轮询等待数据渲染。"""
+        """抓取单只股票资金流向，返回 dict 或 None。
+        每只股票/每轮重试都开全新 context+page，用完即关，避免反爬会话累积。"""
         with self._lock:
-            page = self._ensure_page()
-            if page is None:
+            browser = self._ensure_browser()
+            if browser is None:
                 return None
 
             # 最多尝试 3 轮（CI 跨境网络慢，首轮可能渲染不全；尽量保证拿到）
             for attempt in range(_MAX_ATTEMPTS):
+                context = None
+                page = None
+                body = ""
                 try:
+                    # 每次全新上下文：独立 cookie/会话/指纹，规避反爬累积
+                    context = browser.new_context(
+                        user_agent=random.choice(_USER_AGENTS),
+                        viewport=random.choice(_VIEWPORTS),
+                        locale="zh-CN",
+                    )
+                    context.add_init_script(_ANTI_DETECT)
+                    page = context.new_page()
                     page.goto(
                         _PAGE_URL.format(code=code),
                         wait_until="domcontentloaded",
                         timeout=_TIMEOUT_MS,
                     )
                     # 轮询等待：直到页面出现"主力净流入"文字（数据已渲染）或超时。
-                    # 比固定 sleep 更稳：快网络立即返回，慢网络（CI）多等一会。
-                    body = ""
                     deadline = time.time() + _MAX_RENDER_WAIT
                     while time.time() < deadline:
                         time.sleep(0.6)
@@ -152,6 +154,14 @@ class _BrowserSession:
                 except Exception as e:
                     logger.debug(f"浏览器抓取 {code} 失败 (第{attempt+1}次): {e}")
                     body = ""
+                finally:
+                    # 无论成败，关闭本轮 context+page（释放会话）
+                    for obj in (page, context):
+                        if obj is not None:
+                            try:
+                                obj.close()
+                            except Exception:
+                                pass
 
                 if any(w in body for w in _BLOCK_WORDS):
                     logger.warning(f"浏览器备用源疑似被限流/拦截 ({code})")
@@ -169,14 +179,12 @@ class _BrowserSession:
             return None
 
     def close(self) -> None:
-        for obj_name in ("_page", "_context", "_browser"):
-            obj = getattr(self, obj_name, None)
-            if obj is not None:
-                try:
-                    obj.close()
-                except Exception:
-                    pass
-                setattr(self, obj_name, None)
+        if self._browser is not None:
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
         if self._pw is not None:
             try:
                 self._pw.stop()
